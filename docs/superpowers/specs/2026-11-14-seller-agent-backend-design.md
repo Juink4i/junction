@@ -1,6 +1,6 @@
 # Backend rebuild with a seller agent: design
 
-Date: Sat 14 Nov 2026. Status: design agreed in chat, waiting for review of this file.
+Date: Sat 14 Nov 2026. Status: approved. Plan: `docs/superpowers/plans/2026-11-14-seller-agent-backend.md`.
 
 ## 1. What this changes
 
@@ -180,8 +180,8 @@ One job: given a need and a list of candidates, say which ones to keep.
 
 - **Sees:** the product words as sent, the must-have names, the amount and unit, and for each candidate its id, English and Finnish name, sales unit and property names.
 - **Never sees:** descriptions, prices, stock, the mandate, limits, or anything about another buyer. Descriptions are free text from suppliers, which is where an injected instruction could sit.
-- **Answers:** for each candidate id, keep or drop, with a reason of a few words.
-- **Runs on:** Gemini through `google-genai`, structured output, temperature 0, a 10-second limit. The model is set by `SELLER_MODEL`.
+- **Answers:** every candidate id in one of two lists: keep, or drop with a reason of a few words.
+- **Runs on:** Gemini through `google-genai`, structured output, temperature 0, thinking switched off, a 20-second limit. The model is set by `SELLER_MODEL`. Measured on real data: 6 seconds for 34 candidates, 14 seconds for 80. With thinking left on, the same call ran past 60 seconds.
 
 What code enforces around it:
 
@@ -314,8 +314,8 @@ Feature freeze is Sun 02:00. Each step leaves the tests passing.
 1. Vocabulary: the name map, the matcher, the onboarding list.
 2. Connection check on `/mcp`, and the agent sending the header.
 3. `search_products` with the keyword rules only.
-4. `request_quote`: ranking, quote sets, forecast.
-5. `place_order`: connection mandate, unusual amount to a person, cut-off check.
+4. `place_order`: connection mandate, unusual amount to a person, cut-off check.
+5. `request_quote`: ranking, quote sets, forecast.
 6. Buyer agent: new tools, instructions and scripted plan. Fake server follows.
 7. **The flow works end to end here.**
 8. Seller agent on Gemini.
@@ -335,10 +335,9 @@ If time runs short, cut from the bottom. Steps 8 to 10 each stand alone: without
 - Holding stock for a quote.
 - Alternatives on the approval page. They are in the order reply and the log.
 
-## 17. Open decision
+## 17. Decided after review
 
-The request said the server should check whether "the quantity exceeds that given in the mandate". The mandate has no quantity limit today. It has euro limits and the kitchen's usual orders.
-
-This design reads the quantity check as the existing rule: more than 5× the usual order goes to a person. Nothing is added to the mandate or to onboarding.
-
-The other reading is a new, explicit limit such as "at most 200 L of milk per order", set at onboarding. That would add one onboarding question, one mandate field and one Policy rule. It is not in this design unless asked for.
+- **Quantity check.** "The quantity exceeds that given in the mandate" means the existing rule: more than 5× the usual order in the mandate goes to a person. No explicit quantity limit is added to the mandate or to onboarding.
+- **Search applies the mandate** (section 7, step 3). Agreed.
+- **Ordering an alternative withdraws the waiting order** (section 10). Agreed.
+- **Build order** (section 15), with the Gemini seller agent after the flow works end to end. Agreed.
