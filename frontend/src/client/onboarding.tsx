@@ -107,6 +107,85 @@ function Chips({ items, chosen, onChange, single, tone = 'sage' }: { items: Choi
 }
 
 const select = 'h-9 rounded-md border bg-white px-2 text-sm'
+
+/**
+ * Which day a usual order comes: a calendar of day squares (1–31) for a monthly order,
+ * a row of weekday squares for a weekly one. Tap the chosen square again for "any day".
+ */
+function DayPicker({
+  label,
+  every,
+  value,
+  weekdays,
+  monthDays,
+  onChange,
+}: {
+  label: string
+  every: string
+  value: string | number | null
+  weekdays: Choice[]
+  monthDays: number[]
+  onChange: (v: string | number | null) => void
+}) {
+  const monthly = every === 'month'
+  const square = (on: boolean) =>
+    cn(
+      'flex aspect-square min-w-0 items-center justify-center rounded-md border text-xs font-medium tnum transition-colors sm:text-[13px]',
+      on ? 'border-go bg-go text-go-foreground shadow-[0_0_0_3px_var(--go-soft)]' : 'bg-white text-foreground hover:border-go/50 hover:bg-go-soft',
+    )
+  const said =
+    value == null ? 'Any day' : monthly ? `On day ${value} of each month` : `Every ${weekdays.find((w) => w.code === value)?.name ?? value}`
+
+  return (
+    <fieldset className="space-y-2">
+      <legend className="flex w-full items-center justify-between text-xs text-muted-foreground">
+        <span>{monthly ? 'Which day of the month' : 'Which day of the week'}</span>
+        <span className="font-medium text-emphasis">{said}</span>
+      </legend>
+      {monthly ? (
+        <div className="grid grid-cols-7 gap-1" role="radiogroup" aria-label={`${label}: day of the month`}>
+          {monthDays.map((n) => (
+            <button
+              key={n}
+              type="button"
+              role="radio"
+              aria-checked={value === n}
+              aria-label={`Day ${n}`}
+              className={square(value === n)}
+              onClick={() => onChange(value === n ? null : n)}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-7 gap-1" role="radiogroup" aria-label={`${label}: day of the week`}>
+          {weekdays.map((w) => (
+            <button
+              key={w.code}
+              type="button"
+              role="radio"
+              aria-checked={value === w.code}
+              aria-label={w.name}
+              className={square(value === w.code)}
+              onClick={() => onChange(value === w.code ? null : w.code)}
+            >
+              {w.name.slice(0, 3)}
+            </button>
+          ))}
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => onChange(null)}
+        aria-pressed={value == null}
+        className={cn('rounded-full border px-2.5 py-0.5 text-xs font-medium', value == null ? 'border-primary bg-secondary text-secondary-foreground' : 'bg-white text-muted-foreground hover:bg-muted')}
+      >
+        Any day
+      </button>
+    </fieldset>
+  )
+}
 const num = (s: string): number | null => (s === '' ? null : Number(s))
 
 /** Sign up a new kitchen: answers → signed mandate → registered at Valio Aimo → its dashboard. */
@@ -350,33 +429,19 @@ export default function Onboarding() {
                         </option>
                       ))}
                     </select>
-                    <select
-                      className={cn(select, 'flex-1')}
-                      value={o.on == null ? '' : String(o.on)}
-                      onChange={(e) =>
-                        update((d) => {
-                          const v = e.target.value
-                          d.usual_orders[i].on = v === '' ? null : d.usual_orders[i].every === 'month' ? Number(v) : v
-                        })
-                      }
-                      aria-label={`Usual order ${i + 1}: which day`}
-                    >
-                      <option value="">any day</option>
-                      {o.every === 'month'
-                        ? opts.month_days.map((n) => (
-                            <option key={n} value={n}>
-                              on day {n}
-                            </option>
-                          ))
-                        : opts.weekdays.map((w) => (
-                            <option key={w.code} value={w.code}>
-                              on {w.name}
-                            </option>
-                          ))}
-                    </select>
                     <Button type="button" variant="ghost" size="icon" aria-label={`Remove usual order ${i + 1}`} onClick={() => update((d) => void d.usual_orders.splice(i, 1))}>
                       <Trash2 />
                     </Button>
+                  </div>
+                  <div>
+                    <DayPicker
+                      label={`Usual order ${i + 1}`}
+                      every={o.every}
+                      value={o.on ?? null}
+                      weekdays={opts.weekdays}
+                      monthDays={opts.month_days}
+                      onChange={(v) => update((d) => void (d.usual_orders[i].on = v))}
+                    />
                   </div>
                 </div>
               ))}
