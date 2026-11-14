@@ -26,8 +26,6 @@ function rejectionKind(reason: string): string {
   return reason.split('. ')[0].slice(0, 100)
 }
 
-const FLOW: Phase[] =['awaiting_input', 'awaiting_approval', 'approved', 'shipping', 'completed']
-
 function Kpi({ icon, label, value, sub }: { icon: React.ReactNode; label: string; value: string; sub?: string }) {
   return (
     <Card className="gap-2 p-4">
@@ -38,49 +36,6 @@ function Kpi({ icon, label, value, sub }: { icon: React.ReactNode; label: string
       <div className="text-[26px] leading-none font-semibold text-emphasis tnum">{value}</div>
       {sub && <div className="text-xs text-muted-foreground">{sub}</div>}
     </Card>
-  )
-}
-
-/** The order life cycle as dots joined by a line, with a count in each dot. */
-function Flow({ counts }: { counts: Record<Phase, number> }) {
-  return (
-    <div className="grid gap-4 lg:grid-cols-[1fr_auto]">
-      <ol className="flex" aria-label="Orders by stage">
-        {FLOW.map((p, i) => {
-          const meta = PHASES.find((x) => x.key === p)!
-          const n = counts[p]
-          const wait = p === 'awaiting_input' || p === 'awaiting_approval'
-          return (
-            <li key={p} className="relative flex min-w-0 flex-1 flex-col items-center text-center">
-              {i > 0 && <span className="absolute top-6 right-1/2 h-1.5 w-full -translate-y-1/2 rounded-full bg-go/70" aria-hidden />}
-              <Link
-                to={`/server/orders?phase=${p}`}
-                className={cn(
-                  'relative z-10 flex size-12 items-center justify-center rounded-full text-base font-semibold tnum transition-transform hover:scale-105',
-                  n === 0
-                    ? 'border-2 border-border bg-card text-muted-foreground'
-                    : wait
-                      ? 'bg-wait-soft text-wait ring-2 ring-wait'
-                      : 'bg-go text-go-foreground shadow-[0_0_0_4px_var(--go-soft)]',
-                )}
-                title={meta.hint}
-              >
-                {n}
-              </Link>
-              <div className="mt-2 px-1 text-xs leading-tight font-semibold text-emphasis sm:text-sm">{meta.label}</div>
-              <div className="hidden max-w-[22ch] text-[11px] text-muted-foreground sm:block">{meta.hint}</div>
-            </li>
-          )
-        })}
-      </ol>
-      <Link
-        to="/server/orders?phase=rejected"
-        className="flex items-center gap-3 rounded-lg border border-stop/25 bg-stop-soft/50 px-4 py-3 lg:flex-col lg:justify-center lg:text-center"
-      >
-        <span className="flex size-10 items-center justify-center rounded-full bg-stop text-base font-semibold text-white tnum">{counts.rejected}</span>
-        <span className="text-sm font-semibold text-stop">Rejected</span>
-      </Link>
-    </div>
   )
 }
 
@@ -146,14 +101,6 @@ export default function OpsDashboard() {
         <Kpi icon={<UserRound className="size-4" />} label="Waiting on buyers" value={num(attention.length)} sub="input or approval" />
         <Kpi icon={<Bot className="size-4" />} label="Clients connected" value={`${running} / ${clients?.length ?? 0}`} sub="agents working right now" />
       </div>
-
-      <Card className="gap-4 p-5 sm:p-6">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-base font-semibold text-emphasis">Order flow</h2>
-          <span className="text-xs text-muted-foreground">Shipping and completed follow Valio Aimo’s promised delivery date. No live tracking.</span>
-        </div>
-        {orders ? <Flow counts={stats.counts} /> : <Skeleton className="h-24 w-full" />}
-      </Card>
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
         <Card className="gap-3 p-5">

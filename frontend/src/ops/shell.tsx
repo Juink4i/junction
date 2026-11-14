@@ -39,7 +39,7 @@ function useTheme(): [boolean, () => void] {
     } catch {
       /* ignore */
     }
-    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
+    return false // light by default; dark only when chosen with the toggle
   })
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)

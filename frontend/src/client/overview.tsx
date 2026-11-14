@@ -1,5 +1,5 @@
 import { ArrowRight, CircleHelp, MessagesSquare, Package } from 'lucide-react'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { ApprovalList } from '@/components/approval-list'
 import { Empty, ErrorNote } from '@/components/common'
@@ -11,7 +11,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useAccount } from '@/lib/account'
 import { accountPath, useEvents, usePoll } from '@/lib/api'
 import { eur } from '@/lib/format'
-import { runView } from '@/lib/pipeline'
+import { orderPhase, PHASES, runView, type Phase } from '@/lib/pipeline'
+import { OrderFlow } from '@/components/order-flow'
 import type { Order, PendingApproval } from '@/lib/types'
 import { usePendingCount } from './use-pending'
 
@@ -37,6 +38,13 @@ export default function ClientOverview() {
   const asking = (orders ?? []).filter((o) => o.status === 'needs_clarification')
   const m = account?.mandate
   const waiting = pending + asking.length
+  const [phase, setPhase] = useState<Phase | null>(null)
+  const counts = useMemo(() => {
+    const c = Object.fromEntries(PHASES.map((p) => [p.key, 0])) as Record<Phase, number>
+    for (const o of orders ?? []) c[orderPhase(o)] += 1
+    return c
+  }, [orders])
+  const shown = (orders ?? []).filter((o) => !phase || orderPhase(o) === phase)
 
   return (
     <div className="space-y-8">
@@ -96,8 +104,26 @@ export default function ClientOverview() {
         </Card>
       </Section>
 
+      {/* Order flow: this account's orders by stage */}
+      {orders && orders.length > 0 && (
+        <Section title="Order flow">
+          <Card className="p-5 sm:p-6">
+            <OrderFlow counts={counts} selected={phase} onSelect={setPhase} />
+          </Card>
+        </Section>
+      )}
+
       {/* Orders with delivery progress */}
-      <Section title="Your orders">
+      <Section
+        title={phase ? `Your orders · ${PHASES.find((p) => p.key === phase)?.label}` : 'Your orders'}
+        action={
+          phase && (
+            <button onClick={() => setPhase(null)} className="text-sm font-medium text-primary hover:underline">
+              Show all
+            </button>
+          )
+        }
+      >
         <ErrorNote error={error} onRetry={reload} />
         {loading && !orders && <Skeleton className="h-28 w-full rounded-lg" />}
         {orders && orders.length === 0 && (
@@ -106,7 +132,9 @@ export default function ClientOverview() {
           </Empty>
         )}
         <div className="space-y-3">
-          {orders?.map((o) => <OrderRow key={o.order_id} order={o} to={`/client/orders/${o.order_id}`} />)}
+          {shown.map((o) => (
+            <OrderRow key={o.order_id} order={o} to={`/client/orders/${o.order_id}`} />
+          ))}
         </div>
       </Section>
     </div>
