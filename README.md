@@ -34,6 +34,15 @@ uv run python -m web                       # 6. screens        → http://localh
 uv run python demo/run.py                  # 7. play the five demo scenes
 ```
 
+Server settings (environment variables, all optional):
+
+| Variable | Default | What it does |
+|---|---|---|
+| `SELLER` | Gemini | `keyword` makes the seller screen searches with plain keyword rules instead of Gemini |
+| `SELLER_MODEL` | `gemini-3.8-flash` | The Gemini model the seller agent uses |
+| `ONBOARDING_URL` | `http://localhost:8080/onboarding` | Where a refused agent is told to renew its mandate |
+| `DECISIONS_API` | on | `off` skips Google's Decisions API; the 5× rule still applies |
+
 To make the trade server accept a new kitchen only with an enrolment code that Valio Aimo issued,
 start it with `ENROLMENT_CODES=on uv run python -m server`. Step 4 prints the demo code, and the
 day-care template on the onboarding page already carries it.

@@ -10,11 +10,9 @@ You call **Contract B** in `docs/runner-tasks.md` (six MCP tools plus HTTP endpo
 
 ## Context you need
 
-- One buyer agent, built with Google ADK and Gemini, connected to `http://localhost:8000/mcp`. It does two jobs: Shopper (parse, search, rank, quote, order) and Substitution (good / better / best replacements with a one-line trade-off).
+- One buyer agent, built with Google ADK and Gemini, connected to `http://localhost:8000/mcp` with the buyer's mandate as a bearer token. It passes the buyer's words on, quotes what the server kept, and orders the first option.
 - Start against Runner 2's skeleton server. Don't wait for the real one.
-- The agent must handle all four `place_order` results: `confirmed`, `needs_clarification` (answer, or repeat with `confirm_unusual`), `pending_approval` (poll `get_approval_status`), `rejected` (explain, don't retry).
-- Tag and category filters still let wrong products through (coffee milk, latte drinks, sour milk). Dropping those is the agent's job.
-- Ranking: drop anything that breaks a hard rule, prefer one product covering the full amount, then lowest total price, then earliest delivery, then sustainability labels.
+- The agent must handle the three `place_order` results: `confirmed`, `pending_approval` (poll `get_approval_status`), `rejected` (explain, don't retry). `search_products` and `request_quote` can answer `needs_clarification` with a question.
 - Screens: approval page (phone width), log page with a "Verify log" button, chat page showing messages and tool calls live. They are React + shadcn/ui in `web/ui/src/pages/`, built into `web/static/` (committed). After changing them: `cd web/ui && npm run build`, then commit both.
 - Demo scenes are listed in `docs/valio-aimo-discussion.md`, section 5. The shortage and injection scenes are set up through `data/overrides.json`, which Runner 1 provides.
 - In the injection scene the agent is allowed to be fooled. The point is that the server blocks the order.

@@ -17,7 +17,7 @@ uv run pytest server
 
 ## For the agent and the screens
 
-- Pass the contents of `server/mandates/<buyer>.jwt` as `mandate_token`.
+- Send the contents of `server/mandates/<buyer>.jwt` as `Authorization: Bearer <token>` on every `/mcp` request.
 - Errors come back as the tool result: `{code, message, retryable}`. List tools wrap it as `{"result": ...}` in structured content.
 - `insufficient_stock` errors say how much is available and name on-time substitutes in `message`.
 - `GET /approvals` returns pending approvals only. Each has `approval_id, order_id, quote_id, status, buyer, approvers, reasons, agent_rationale, lines, total_eur, total_with_tax_eur, created_at`.

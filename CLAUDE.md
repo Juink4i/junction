@@ -15,18 +15,22 @@ Scoring: working end-to-end flow 30%, buys what was asked 20%, rules/approvals/l
 **The AI suggests. Plain code decides.** No spending, allergen or delivery rule ever lives in an AI prompt.
 
 ```
-Buyer agent (one agent, Google ADK + Gemini)        agent/
-   │ MCP
-MCP server: 6 tools, Policy, audit log (plain code)  server/
+Buyer agent (Google ADK + Gemini): passes the buyer's words on         agent/
+   │ MCP, with the buyer's signed mandate as a bearer token
+MCP server: 6 tools, Policy, audit log (plain code)                     server/
+   ├─ words → tags, ranking, split, alternatives (plain code)
+   └─ seller agent (Gemini): removes products that don't fit a search
    │ shortlist only
-Catalog: product search, unit maths, API client      catalog/
+Catalog: product search, unit maths, API client                         catalog/
    │
 Valio Aimo mock APIs (price, availability) + product file
 ```
 
-- The buyer signs a **mandate** (JSON, Ed25519 JWS) saying what its agent may do. The server verifies it on every order.
-- Quotes are signed and expire after 15 minutes.
-- Every order ends as one of: `confirmed`, `needs_clarification`, `pending_approval`, `rejected`.
+- The buyer signs a **mandate** (JSON, Ed25519 JWS) saying what its agent may do. It is needed to connect, and the server checks it on every call.
+- The buyer agent knows no catalog codes. The server maps plain words such as "lactose-free" to the product file's 21 nutrition claims.
+- The **seller agent** can only remove products from a search result. It sees names and properties, never descriptions, prices or a mandate. If Gemini fails, keyword rules take over.
+- Ranking is plain server code. A quote request returns up to five options, each its own signed quote, valid for 15 minutes.
+- Every order ends as one of: `confirmed`, `pending_approval`, `rejected`. `needs_clarification` is what `search_products` and `request_quote` answer when a parameter is missing.
 - Every step is written to a hash-chained log that both sides can read and verify.
 
 ## Facts about the data and APIs
@@ -43,8 +47,8 @@ Valio Aimo mock APIs (price, availability) + product file
 ## Rules for every session
 
 - Python 3.12, `uv`, `pytest`, SQLite.
-- Work only in your runner's folders and on your runner's branch. See the folder's own `CLAUDE.md`.
-- Contracts A and B in `docs/runner-tasks.md` are fixed. Ask the user before changing either.
+- The work is no longer split by runner. One developer works across all folders. The folder `CLAUDE.md` files describe each part.
+- Contract A (catalog functions) and Contract B (MCP tools) are in `docs/runner-tasks.md`. Ask the user before changing either.
 - Secrets live in `.env` (`VALIO_API_KEY`, `GEMINI_API_KEY`). Never print or commit them.
 - `data/raw/` holds the Valio Aimo files and is git-ignored. The data may only be used for this event.
 - Write the test first. Commit after each finished task. Merge to `main` in small pieces.
@@ -54,3 +58,4 @@ Valio Aimo mock APIs (price, availability) + product file
 
 - `docs/valio-aimo-discussion.md`: the full plan, mandate example, decision and exception tables, demo script, pitch.
 - `docs/runner-tasks.md`: the work split, Contracts A and B, checkpoints, and each runner's done-checklist.
+- `docs/superpowers/specs/2026-11-14-seller-agent-backend-design.md`: the seller-agent rebuild: connection, search, ranked quotes, alternatives.
