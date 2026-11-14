@@ -1,16 +1,15 @@
-# Runner 2: Server
+# Server
 
-You own `server/` and `data/state.db`. Branch: `server`. Do not edit `catalog/`, `agent/`, `web/` or `demo/`.
+This part is `server/` and `data/state.db`. The work is no longer split by runner or branch. See the root `CLAUDE.md`.
 
 ## Goal
 
 An MCP server through which an AI agent can search, get a quote and place an order, where only plain code decides whether an order goes through.
 
-You call **Contract A** (Runner 1's functions) and provide **Contract B** (six MCP tools plus HTTP endpoints). Both are in `docs/runner-tasks.md`. Your done-checklist is in the same file under "Prompts for each runner → Runner 2".
+You call **Contract A** (the catalog's functions) and provide **Contract B** (six MCP tools plus HTTP endpoints). Both are in `docs/runner-tasks.md`.
 
 ## Context you need
 
-- First deliverable: a skeleton with all six tools returning fake data in the Contract B shape. Merge it early so Runner 3 can connect. Use a fake catalog until Runner 1's functions land.
 - Server name `valio-aimo-trade`, at `http://localhost:8000/mcp`. Official MCP Python SDK.
 - Only `request_quote` calls the Valio Aimo APIs: one price call and one availability call per request, however many products. `search_products` reads the product file and asks the seller agent (one Gemini call, or keyword rules).
 - The mandate JSON shape and the "who decides" table are in `docs/valio-aimo-discussion.md`, section 4. Each table row is one test.

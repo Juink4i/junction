@@ -95,6 +95,8 @@ The server also serves plain HTTP for the screens. These need no mandate:
 
 ---
 
+> **History.** Everything from here down is the original three-runner plan, kept for reference. It describes the first build: an order could end as `needs_clarification`, the buyer agent dropped wrong products and ranked offers itself, and `place_order` took a `mandate_token`. Contract B above and `docs/superpowers/specs/2026-11-14-seller-agent-backend-design.md` describe the system as built.
+
 ## Runner 1: Catalog
 
 **Goal:** given a request like "1,000 L lactose-free milk", the code can find the right products, work out how many units to order, and get real prices and delivery dates.
