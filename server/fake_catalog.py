@@ -95,6 +95,11 @@ _PRODUCTS = {
             sales_unit="2 KG", allergens_contains=["AE", "BM"], vendor="Fake Bakery", country="FI",
             description="Oven pancake",
         ),
+        Product(
+            id="460500", name_en="Wholegrain bread roll 30 pcs", name_fi="Täysjyväsämpylä 30 kpl",
+            category="41760", sales_unit="BAG", allergens_contains=["AW"], vendor="Fake Bakery",
+            country="FI", description="Wholegrain bread rolls",
+        ),
     ]
 }
 
@@ -107,6 +112,7 @@ _TERMS = {
     "464500": (1.0, "L", 1.89, "Stock", False),
     "460004": (1.0, "KG", 6.50, "Stock", False),
     "460000": (2.0, "KG", 9.80, "Stock", False),
+    "460500": (30.0, "PCS", 7.20, "Stock", False),
 }
 
 

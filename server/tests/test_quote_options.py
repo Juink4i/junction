@@ -9,6 +9,7 @@ from server.service import Service
 from server.tests.test_service import Catalog, Clock, count
 
 MILKS = ["464201", "465039", "463038", "464179"]
+ROLLS = "460500"  # 30 bread rolls per bag
 MONDAY = "2026-11-16"
 
 
@@ -111,7 +112,7 @@ def test_what_cannot_be_priced_or_measured_is_left_out_with_a_reason(svc, school
     assert first_products(result) == ["464201"]
     reasons = {n["product_id"]: n["reason"] for n in result["not_offered"]}
     assert set(reasons) == {"464179", "460004", "nope"}
-    assert "weight" in reasons["460004"] and "catalog" in reasons["nope"]
+    assert "kilograms" in reasons["460004"] and "catalog" in reasons["nope"]
     assert "ordered" in reasons["464179"]
 
 
@@ -145,12 +146,51 @@ def test_missing_parameters_get_a_question(svc, hotel, ids, amount, unit, need_b
     (1000, "L", "2026-11-13", "need_by_in_past"),
     (-5, "L", MONDAY, "bad_amount"),
     (float("inf"), "L", MONDAY, "bad_amount"),
-    (1000, "crates", MONDAY, "bad_unit"),
 ])
 def test_bad_parameters_are_structured_errors(svc, hotel, amount, unit, need_by, code):
     error = svc.request_quote(hotel, MILKS, amount, unit, need_by)
     assert set(error) == {"code", "message", "retryable"}
     assert error["code"] == code
+
+
+def test_a_unit_the_server_cannot_count_in_gets_a_question(svc, hotel):
+    asked = quoted(svc, hotel, amount=3, unit="crates")
+    assert (asked["status"], asked["missing"]) == ("needs_clarification", ["unit"])
+    assert "crates" in asked["question"]
+    assert count(svc, "quotes") == 0
+
+
+@pytest.mark.parametrize("unit", ["l", "litres", "Liters"])
+def test_unit_words_are_understood(svc, hotel, unit):
+    assert quoted(svc, hotel, unit=unit)["asked"]["unit"] == "L"
+
+
+def test_pieces_are_counted(svc, school):
+    result = quoted(svc, school, ids=[ROLLS], amount=200, unit="PCS")
+    line = result["options"][0]["quote"]["lines"][0]
+    assert (line["units"], line["covers"], line["content_unit"]) == (7, 210, "PCS")
+
+
+def test_products_that_cannot_be_counted_get_a_question_not_a_guess(svc, hotel):
+    asked = quoted(svc, hotel, amount=200, unit="PCS")
+    assert (asked["status"], asked["missing"]) == ("needs_clarification", ["unit"])
+    assert "litres" in asked["question"]
+    assert count(svc, "quotes") == 0
+
+
+def test_the_same_number_in_another_unit_is_questioned_once(svc, hotel):
+    quoted(svc, hotel, amount=200, unit="PCS")
+    swapped = quoted(svc, hotel, amount=200, unit="L")
+    assert swapped["status"] == "needs_clarification"
+    assert "200 PCS" in swapped["question"]
+    assert count(svc, "quotes") == 0
+    # Asked again after the question, the buyer has confirmed it.
+    assert quoted(svc, hotel, amount=200, unit="L")["status"] == "ok"
+
+
+def test_a_new_amount_in_the_suggested_unit_goes_through(svc, hotel):
+    quoted(svc, hotel, amount=200, unit="PCS")
+    assert quoted(svc, hotel, amount=150, unit="L")["status"] == "ok"
 
 
 def test_api_failure_is_a_retryable_error(svc, hotel, catalog):

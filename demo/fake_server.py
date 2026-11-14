@@ -30,6 +30,7 @@ from starlette.responses import JSONResponse
 
 from server import ranking, vocabulary
 from server.seller import KeywordSeller, Need
+from server.vocabulary import unit_code
 
 ROOT = Path(__file__).resolve().parent.parent
 OVERRIDES_FILE = ROOT / "data" / "overrides.json"
@@ -272,6 +273,10 @@ def search_products(ctx: Context, product: str | None = None, must_have: list[st
                     unknown=understood.unknown)
     if not understood.text:
         return _ask("What product do you need?", missing=["product"])
+    if unit is not None and unit_code(unit) is None:
+        return _ask(f'The server cannot measure in "{unit}". Ask the buyer for L, KG or PCS.',
+                    missing=["unit"])
+    unit = unit_code(unit)
     words, tags = understood.text.split(), set(understood.tags)
     candidates = []
     for pid in PRODUCTS:
@@ -330,13 +335,17 @@ def request_quote(ctx: Context, product_ids: list[str] | None = None, amount: fl
     except ValueError:
         return {"code": "bad_date", "message": "need_by must be a date like 2026-11-16.",
                 "retryable": False}
+    if unit_code(unit) is None:
+        return _ask(f'The server cannot measure in "{unit}". Ask the buyer for L, KG or PCS.',
+                    missing=["unit"])
+    unit = unit_code(unit)
     candidates, not_offered = [], []
     for pid in dict.fromkeys(product_ids):
         p = _product(pid)
         if p is None:
             not_offered.append(dict(product_id=pid, name=None, reason="Not in the catalog."))
             continue
-        if unit.upper() != _content_unit(p):
+        if unit != _content_unit(p):
             not_offered.append(dict(product_id=pid, name=p["name_en"],
                                     reason=f"It is sold by {_content_unit(p)}, not {unit}."))
             continue

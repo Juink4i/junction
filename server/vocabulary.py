@@ -92,3 +92,21 @@ def understand(product: str, must_have: list[str] | None = None) -> Understood:
             if PHRASES[phrase] not in tags:
                 tags.append(PHRASES[phrase])
     return Understood(text, tags, unknown)
+
+
+UNIT_WORDS = {"L": "litres", "KG": "kilograms", "PCS": "pieces"}
+_UNITS = {
+    "L": ("l", "ltr", "litre", "litres", "liter", "liters", "litra", "litraa"),
+    "KG": ("kg", "kgs", "kilo", "kilos", "kilogram", "kilograms", "kiloa"),
+    "PCS": ("pcs", "pc", "piece", "pieces", "kpl", "kappale", "kappaletta", "each", "ea"),
+}
+_UNIT_CODES = {word: code for code, words in _UNITS.items() for word in words}
+
+
+def unit_code(word: str | None) -> str | None:
+    """ "L", "KG" or "PCS" for a unit word, or None when the server cannot measure in it.
+
+    Grams, crates or product words such as "eggs" are None: the buyer must say it again in a
+    unit the server can measure, so no number is ever carried over to a different unit.
+    """
+    return _UNIT_CODES.get(normalise(word or ""))

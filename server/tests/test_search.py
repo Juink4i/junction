@@ -213,3 +213,13 @@ def test_the_seller_runs_outside_the_services_lock():
     hotel = svc.authenticate(issue_demo_mandates(svc.conn)["hotel"])
     svc.search_products(hotel, "milk")
     assert seller.other_call_finished
+
+
+def test_a_unit_the_server_cannot_count_in_gets_a_question(svc, hotel):
+    asked = svc.search_products(hotel, "milk", amount=3, unit="crates")
+    assert (asked["status"], asked["missing"]) == ("needs_clarification", ["unit"])
+    assert "crates" in asked["question"]
+
+
+def test_unit_words_are_understood_in_a_search(svc, hotel):
+    assert svc.search_products(hotel, "lactose-free milk", amount=40, unit="litres")["status"] == "ok"

@@ -93,3 +93,9 @@ def test_the_agent_is_told_to_pass_the_buyers_words_on():
     text = build_instruction("Hotel Chain Oy", SATURDAY)
     assert "search_products" in text and "request_quote" in text and "place_order" in text
     assert "needs_clarification" in text and "pending_approval" in text
+
+
+def test_the_agent_is_told_never_to_convert_the_buyers_amount():
+    text = build_instruction("Hotel Chain Oy", SATURDAY)
+    assert "PCS" in text
+    assert "Never convert" in text

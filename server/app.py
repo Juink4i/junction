@@ -90,14 +90,14 @@ def _connect(ctx: Context) -> tuple[Buyer | None, dict[str, Any] | None]:
 
 @mcp.tool()
 def search_products(ctx: Context, product: str | None = None, must_have: list[str] | None = None,
-                    amount: float | None = None,
-                    unit: Literal["L", "KG"] | None = None) -> dict[str, Any]:
+                    amount: float | None = None, unit: str | None = None) -> dict[str, Any]:
     """Find the products that fit a request. No prices here; use request_quote for those.
 
     Say what is needed in plain words. product is the kind of product, for example "milk" or
     "lactose-free milk". must_have lists properties every product must have, in plain words,
-    for example ["lactose-free"]. You never need a catalog code. amount and unit ("L" or
-    "KG") are optional and help leave out packs of the wrong size.
+    for example ["lactose-free"]. You never need a catalog code. amount and unit are optional
+    and help leave out packs of the wrong size. unit is "L" (litres), "KG" (kilograms) or
+    "PCS" (pieces, e.g. eggs). If the buyer used another unit, pass their word: the server asks.
 
     The reply lists the products that fit, and the ones that were dropped with the reason for
     each. The buyer's mandate is applied: its own must-haves and allowed categories always
@@ -130,12 +130,14 @@ class Preferences(BaseModel):
 
 @mcp.tool()
 def request_quote(ctx: Context, product_ids: list[str] | None = None, amount: float | None = None,
-                  unit: Literal["L", "KG"] | None = None, need_by: str | None = None,
+                  unit: str | None = None, need_by: str | None = None,
                   preferences: Preferences | None = None) -> dict[str, Any]:
     """Price the products from search_products and get ranked options to order.
 
-    Give every product id the search returned, the amount needed in litres ("L") or kilograms
-    ("KG"), and need_by as a date like 2026-11-16. The server converts the amount to whole
+    Give every product id the search returned, the amount needed in litres ("L"), kilograms
+    ("KG") or pieces ("PCS"), and need_by as a date like 2026-11-16. Never convert the buyer's
+    amount to another unit: if a product cannot be measured in the buyer's unit, the reply is
+    "needs_clarification" with a question for the buyer. The server converts the amount to whole
     sales units, prices each product and ranks them: on time first, then the buyer's
     preferences, or price, delivery date, reliability and sustainability.
 

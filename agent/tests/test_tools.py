@@ -83,6 +83,21 @@ async def test_the_servers_question_reaches_the_agent(fake):
     assert "lactose-free" in out["known_properties"]
 
 
+def test_the_model_can_count_pieces_or_pass_the_buyers_own_unit():
+    tools = _tools(_box(link=None)[0])
+    for name in ("record_request", "search_products", "request_quote"):
+        unit = FunctionTool(tools[name])._get_declaration().parameters_json_schema["properties"]["unit"]
+        assert "enum" not in unit, name
+        assert "PCS" in inspect.getdoc(tools[name]), name
+
+
+async def test_a_unit_the_server_cannot_measure_in_comes_back_as_a_question(fake):
+    async with TradeLink(fake.mcp_url, "demo-hotel") as link:
+        box, _ = _box(link)
+        out = await _tools(box)["request_quote"](["464201"], 200, "crates", MONDAY)
+    assert (out["status"], out["missing"]) == ("needs_clarification", ["unit"])
+
+
 async def test_the_options_card_comes_from_the_servers_ranking(fake):
     async with TradeLink(fake.mcp_url, "demo-hotel") as link:
         box, sink = _box(link)

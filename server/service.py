@@ -20,6 +20,7 @@ from server.mandate import BUYER_ID, MandateError, check_mandate, verify_mandate
 from server.seller import KeywordSeller, Need, keyword_verdict
 from server.policy import decide, eur, hard_stops, period_start
 from server.unusual import MODEL, THRESHOLD, flag_reason
+from server.vocabulary import UNIT_WORDS, unit_code
 
 QUOTE_TTL = timedelta(minutes=15)
 CANDIDATE_LIMIT = 100  # the most products one search hands to the seller
@@ -37,6 +38,11 @@ PRODUCT_FIELDS = SUMMARY_FIELDS + (
 
 def error(code: str, message: str, retryable: bool = False) -> dict[str, Any]:
     return {"code": code, "message": message, "retryable": retryable}
+
+
+def _unknown_unit_question(unit: Any) -> str:
+    return (f'The server cannot measure in "{unit}". Ask the buyer how much they need in litres '
+            '(L), kilograms (KG) or pieces (PCS). Do not convert the number yourself.')
 
 
 def _pick(obj: Any, fields: tuple[str, ...]) -> dict[str, Any]:
@@ -96,6 +102,8 @@ class Service:
         self.now = now
         self.key = signing.server_key(conn)
         self._lock = threading.RLock()
+        # buyer id -> (amount, unit) of the last request the server could not measure.
+        self._unit_asked: dict[str, tuple[float, str]] = {}
 
     def _log(self, actor: str, action: str, reason: str, order_id: str | None = None,
              quote_id: str | None = None) -> None:
@@ -245,6 +253,10 @@ class Service:
             return self._ask(buyer, "search_products", missing=["product"],
                              question='What product do you need? Give it in plain words, '
                                       'for example "milk".')
+        if unit is not None and unit_code(unit) is None:
+            return self._ask(buyer, "search_products", missing=["unit"],
+                             question=_unknown_unit_question(unit))
+        unit = unit_code(unit)
 
         # The mandate's own must-haves and categories always apply. Plain code, before any AI.
         from_mandate = list(buyer.mandate.get("substitution", {}).get("must_keep", []))
@@ -379,8 +391,8 @@ class Service:
             try:
                 plans.append((product, self.catalog.units_needed(product.id, line["amount"], line["unit"])))
             except Exception:
-                return error("bad_unit", f"{product.name_en} cannot be ordered in {line['unit']}. "
-                             "Use the other unit (L or KG).")
+                return error("bad_unit", f"{product.name_en} cannot be measured in {line['unit']}. "
+                             "Use L, KG or PCS, whichever it is sold in.")
 
         offers = self._offers([product.id for product, _ in plans], need_by)
         if "code" in offers and "retryable" in offers:
@@ -473,7 +485,7 @@ class Service:
             return self._ask(buyer, "request_quote", missing=missing,
                              question="To price this I need: " + ", ".join(missing) + ". Give "
                                       "product_ids from search_products, the amount and unit "
-                                      '("L" or "KG"), and need_by as a date like 2026-11-16.')
+                                      '("L", "KG" or "PCS"), and need_by as a date like 2026-11-16.')
 
         def refuse(problem: dict) -> dict:
             self._log(buyer.actor, "request_quote", f"No quote given: {problem['message']}")
@@ -487,12 +499,21 @@ class Service:
         if need_by < now.date():
             return refuse(error("need_by_in_past",
                                 f"The need-by date {need_by.isoformat()} is in the past."))
-        unit = str(unit).upper()
-        if unit not in ("L", "KG"):
-            return refuse(error("bad_unit", 'unit must be "L" (litres) or "KG" (kilograms).'))
+        if unit_code(unit) is None:
+            return self._ask(buyer, "request_quote", missing=["unit"],
+                             question=_unknown_unit_question(unit))
+        unit = unit_code(unit)
         if not (isinstance(amount, (int, float)) and not isinstance(amount, bool)
                 and amount > 0 and math.isfinite(amount)):
             return refuse(error("bad_amount", "The amount must be a number above zero."))
+        # An agent that cannot get a quote in one unit may re-send the same number in another,
+        # turning 200 eggs into 200 kg. The first time, the buyer is asked instead.
+        before = self._unit_asked.pop(buyer.buyer_id, None)
+        if before and before[0] == amount and before[1] != unit:
+            return self._ask(buyer, "request_quote", missing=["unit"], question=(
+                f"Earlier the request was {amount:g} {before[1]}. {amount:g} {unit} is a different "
+                f"amount. Ask the buyer how many {UNIT_WORDS[unit]} they need. Do not convert the "
+                "number yourself."))
 
         ids = list(dict.fromkeys(str(i) for i in product_ids))[:MAX_QUOTE_PRODUCTS]
         not_offered: list[dict] = []
@@ -517,7 +538,7 @@ class Service:
         if "code" in offers and "retryable" in offers:
             return refuse(offers)
 
-        candidates = []
+        candidates, measured_in = [], set()
         for pid, product in products.items():
             offer = offers.get(pid)
             if offer is None or not offer.orderable:
@@ -527,11 +548,21 @@ class Service:
             try:
                 plan = self.catalog.units_needed(pid, amount, unit)
             except Exception:
-                sold_by = "weight, not volume" if unit == "L" else "volume, not weight"
+                other = self._measured_in(pid, amount, unit)
+                measured_in |= other
+                sold_in = (" It is sold in " + " or ".join(UNIT_WORDS[u] for u in sorted(other)) + "."
+                           if other else "")
                 not_offered.append({"product_id": pid, "name": product.name_en,
-                                    "reason": f"It is sold by {sold_by}, so it cannot be ordered in {unit}."})
+                                    "reason": f"It cannot be measured in {UNIT_WORDS[unit]}.{sold_in}"})
                 continue
             candidates.append(self._candidate(product, plan, offer))
+        if not candidates and measured_in:
+            self._unit_asked[buyer.buyer_id] = (amount, unit)
+            words = " or ".join(UNIT_WORDS[u] for u in sorted(measured_in))
+            return self._ask(buyer, "request_quote", missing=["unit"], question=(
+                f"None of these products can be measured in {UNIT_WORDS[unit]}. They are sold in "
+                f"{words}. Ask the buyer how much they need in {words}. Do not convert "
+                f"{amount:g} {unit} yourself."))
 
         prefs = preferences or {}
         ranked = ranking.rank(candidates, need_by, prefs.get("priorities"), prefs.get("pack_size"))
@@ -565,6 +596,19 @@ class Service:
         return {"status": "ok", "set_id": set_id,
                 "asked": {"amount": amount, "unit": unit, "need_by": need_by.isoformat()},
                 "options": options, "not_offered": not_offered}
+
+    def _measured_in(self, product_id: str, amount: float, unit: str) -> set[str]:
+        """The other units this product can be measured in. Prices are cached by now."""
+        found = set()
+        for other in UNIT_WORDS:
+            if other == unit:
+                continue
+            try:
+                self.catalog.units_needed(product_id, amount, other)
+                found.add(other)
+            except Exception:
+                pass
+        return found
 
     # Orders
 

@@ -45,6 +45,43 @@ def test_litres_of_a_product_priced_per_kilo_is_refused(priced):
         api.units_needed("472492", 1000, "L")
 
 
+@pytest.mark.parametrize("name, pieces", [
+    ("Kieku Organic egg M90 5200g", 90),
+    ("Kieku Barn Eggs L180 12300g", 180),
+    ("Kieku Barn eggs S90 4320g", 90),
+    ("Kieku Barn egg M10 580g", 10),
+    ("20 x Kieku Barn egg L6 408g", 6),
+    ("Kotimaisia viiriäisen munia 10pcs 120g", 10),
+    ("Duni 40cm 3-ply bordeaux napkin 125pcs", 125),
+    ("Arla 10 L novobox low fat milk", None),
+    ("Tork Jumbo Toilet Roll Natural 6x250m T1", None),
+    ("Valio semi skimmed milk 1 l", None),
+])
+def test_pieces_from_name(name, pieces):
+    assert units.pieces_from_name(name) == pieces
+
+
+@pytest.mark.parametrize("pid, per_unit, units_for_200", [
+    ("463883", 90, 3),    # Kieku Organic egg M90: a case of 90
+    ("467676", 10, 20),   # Kieku Barn egg M10: a pack of 10
+    ("468445", 120, 2),   # 20 x Kieku Barn egg L6: a case of 20 packs of 6
+])
+def test_eggs_by_the_piece(catalog, pid, per_unit, units_for_200):
+    plan = api.units_needed(pid, 200, "PCS")
+    assert (plan.content_per_unit, plan.units, plan.content_unit) == (per_unit, units_for_200, "PCS")
+
+
+def test_pieces_from_the_supplier_count(catalog):
+    # 460020 PikPak waste bags: the supplier gives 50 pieces (H87) per pack.
+    plan = api.units_needed("460020", 120, "PCS")
+    assert (plan.content_per_unit, plan.units) == (50, 3)
+
+
+def test_pieces_of_milk_is_refused_without_an_api_call(catalog):
+    with pytest.raises(units.UnitMismatch):
+        api.units_needed("464201", 200, "PCS")
+
+
 def test_unknown_product(catalog):
     with pytest.raises(KeyError):
         api.units_needed("000000", 10, "L")

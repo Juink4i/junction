@@ -26,7 +26,7 @@ All in `catalog/api.py`.
 def search_products(text: str, category: str | None = None,
                     must_have_tags: list[str] = [], limit: int = 20) -> list[ProductSummary]
 def get_product(product_id: str) -> Product | None
-def units_needed(product_id: str, amount: float, unit: str) -> UnitPlan     # unit is "L" or "KG"
+def units_needed(product_id: str, amount: float, unit: str) -> UnitPlan     # unit is "L", "KG" or "PCS"
 def price_and_availability(product_ids: list[str], delivery_date: date) -> dict[str, Offer]
 def substitute_candidates(product_id: str, must_keep_tags: list[str],
                           max_price_increase_pct: float, delivery_date: date) -> list[Offer]
@@ -37,7 +37,7 @@ ProductSummary: id, name_en, name_fi, category, sales_unit, tags: list[str], lab
 Product:        ProductSummary + allergens_contains, allergens_may_contain, allergens_free_from,
                 allergen_info_missing: bool, vendor, country, description, carbon_kg_per_kg | None,
                 delivery_reliability | None, official_substitutes: list[str]
-UnitPlan:       product_id, sales_unit, content_per_unit: float, content_unit: "L"|"KG",
+UnitPlan:       product_id, sales_unit, content_per_unit: float, content_unit: "L"|"KG"|"PCS",
                 units: int, covers: float            # units is rounded up
 Offer:          product_id, unit_price_eur, unit_price_with_tax_eur, comparison_price_eur,
                 comparison_unit, tax_rate, list_price_eur, price_valid_to: datetime,
@@ -61,6 +61,8 @@ Anything else gets 401 `{code, message, retryable: false, onboarding_url}` with 
 | `search_products` | `product`, `must_have?`, `amount?`, `unit?` (plain words, no codes) | `SearchResult` |
 | `get_product` | `product_id` | `Product` |
 | `request_quote` | `product_ids`, `amount`, `unit`, `need_by`, `preferences?: {priorities?, pack_size?}` | `QuoteSet` |
+
+`unit` is `"L"`, `"KG"` or `"PCS"` (pieces), or a word such as "litres" or "kpl". Any other unit, a product set that cannot be measured in the unit, or the same amount re-sent in a different unit gets `needs_clarification` with `missing: ["unit"]`. The server never carries a number over to another unit.
 | `place_order` | `quote_id`, `rationale`, `agent_signature?` | `OrderResult` |
 | `get_approval_status` | `approval_id` | `{status, decided_by?, decided_at?}` |
 | `get_audit_log` | `order_id?` or `quote_id?` | list of `LogEntry` |

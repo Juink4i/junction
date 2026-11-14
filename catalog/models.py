@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-Unit = Literal["L", "KG"]
+Unit = Literal["L", "KG", "PCS"]
 
 
 class ProductSummary(BaseModel):
@@ -36,7 +36,7 @@ class Product(ProductSummary):
 class UnitPlan(BaseModel):
     product_id: str
     sales_unit: str
-    content_per_unit: float  # litres or kg in one sales unit
+    content_per_unit: float  # litres, kg or pieces in one sales unit
     content_unit: Unit
     units: int  # sales units to order, rounded up
     covers: float  # units * content_per_unit, always >= the amount asked for

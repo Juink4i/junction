@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Awaitable, Callable
 
 from agent.config import Settings
 from agent.events import EventSink
@@ -124,15 +124,16 @@ class Toolbox:
     def functions(self) -> list[Callable[..., Awaitable[dict[str, Any]]]]:
         box = self
 
-        async def record_request(product: str, amount: float, unit: Literal["L", "KG"], need_by: str,
+        async def record_request(product: str, amount: float, unit: str, need_by: str,
                                  must_have: list[str] | None = None,
                                  avoid: list[str] | None = None, notes: str | None = None) -> dict:
             """Write down the buyer's request in structured form. Call this first, once.
 
             Args:
               product: What the buyer wants, in the buyer's own words, e.g. "lactose-free milk".
-              amount: How much, in litres or kilograms.
-              unit: "L" or "KG".
+              amount: How much, exactly as the buyer said it. Never convert it to another unit.
+              unit: "L" for litres, "KG" for kilograms, "PCS" for pieces (e.g. 200 eggs). If
+                none fits, the buyer's own word, e.g. "crates".
               need_by: The date it must arrive by, as YYYY-MM-DD.
               must_have: Properties the product must have, in plain words, e.g. ["lactose-free"].
               avoid: Kinds of product the buyer would not accept, if they said so.
@@ -158,7 +159,7 @@ class Toolbox:
               product: What is needed, in plain words, e.g. "lactose-free milk".
               must_have: Properties every product must have, in plain words, e.g. ["lactose-free"].
               amount: How much is needed, if known. It helps leave out packs of the wrong size.
-              unit: "L" or "KG", the unit of amount.
+              unit: "L", "KG" or "PCS" (pieces), the unit of amount, or the buyer's own word.
             """
             args: dict[str, Any] = {"product": product}
             if must_have:
@@ -178,7 +179,7 @@ class Toolbox:
             """
             return await box._call("get_product", {"product_id": product_id})
 
-        async def request_quote(product_ids: list[str], amount: float, unit: Literal["L", "KG"],
+        async def request_quote(product_ids: list[str], amount: float, unit: str,
                                 need_by: str) -> dict:
             """Get real prices and delivery dates as ranked options, best first.
 
@@ -189,8 +190,9 @@ class Toolbox:
 
             Args:
               product_ids: Every product id from search_products.
-              amount: How much is needed, in litres or kilograms (not sales units).
-              unit: "L" for litres or "KG" for kilograms.
+              amount: How much is needed, as the buyer said it (not sales units).
+              unit: "L" for litres, "KG" for kilograms or "PCS" for pieces. If the reply is
+                "needs_clarification" about the unit, ask the buyer; never convert it yourself.
               need_by: Date the goods must arrive by, YYYY-MM-DD.
             """
             args: dict[str, Any] = {"product_ids": list(product_ids), "amount": amount, "unit": unit,

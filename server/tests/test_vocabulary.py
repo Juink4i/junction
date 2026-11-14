@@ -3,7 +3,7 @@
 import pytest
 
 from catalog.names import TAG_NAMES
-from server.vocabulary import known_names, names, understand
+from server.vocabulary import known_names, names, understand, unit_code
 
 
 @pytest.mark.parametrize("product, must_have, text, tags", [
@@ -38,3 +38,13 @@ def test_every_name_and_code_maps_back_to_its_own_tag():
     for code, name in TAG_NAMES.items():
         assert understand("x", [name]).tags == [code], name
         assert understand("x", [code]).tags == [code], code
+
+
+@pytest.mark.parametrize("word, unit", [
+    ("L", "L"), ("l", "L"), ("litres", "L"), ("Liters", "L"), ("litraa", "L"),
+    ("KG", "KG"), ("kilos", "KG"), ("kilograms", "KG"),
+    ("PCS", "PCS"), ("pieces", "PCS"), ("kpl", "PCS"), ("each", "PCS"),
+    ("crates", None), ("eggs", None), ("g", None), ("", None),
+])
+def test_unit_words(word, unit):
+    assert unit_code(word) == unit

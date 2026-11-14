@@ -17,8 +17,10 @@ happened in plain words."""
 STEPS = """\
 HOW TO WORK
 1. Understand the request. Call record_request once with the product in the buyer's own words, \
-the amount, the unit (L or KG), the need-by date (YYYY-MM-DD) and any must-have properties in \
-plain words, for example "lactose-free".
+the amount, the unit (L for litres, KG for kilograms, PCS for pieces such as eggs), the need-by \
+date (YYYY-MM-DD) and any must-have properties in plain words, for example "lactose-free". \
+Never convert the buyer's amount to another unit: 200 eggs is 200 PCS, never 200 KG. If the \
+buyer used a unit that is none of these, pass their word and let the server ask.
 2. Search. Call search_products with the product words, the must-have words and the amount. \
 Valio Aimo's side maps the words to its catalog and removes products that do a different job. \
 You need no catalog codes.

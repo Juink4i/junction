@@ -128,15 +128,16 @@ def price_and_availability(product_ids: list[str], delivery_date: date) -> dict[
 
 
 def units_needed(product_id: str, amount: float, unit: str) -> UnitPlan:
-    """How many sales units cover `amount` litres or kilos. Always rounds up.
+    """How many sales units cover `amount` litres, kilos or pieces. Always rounds up.
 
-    Uses the product file when it gives a clean volume/weight. Otherwise uses Valio Aimo's own
-    unit price / comparison price (one cached price call, any date: pack size doesn't change).
-    Raises UnitMismatch when the product is measured in the other unit; no density guessing.
+    Uses the product file when it gives a clean volume/weight/piece count. Otherwise, for
+    litres and kilos, uses Valio Aimo's own unit price / comparison price (one cached price
+    call, any date: pack size doesn't change). Raises UnitMismatch when the product is
+    measured in another unit; no density guessing.
     """
     unit = unit.upper()
-    if unit not in ("L", "KG"):
-        raise ValueError(f"unit must be 'L' or 'KG', not {unit!r}")
+    if unit not in ("L", "KG", "PCS"):
+        raise ValueError(f"unit must be 'L', 'KG' or 'PCS', not {unit!r}")
     if not amount or amount <= 0:
         raise ValueError("amount must be positive")
     r = _row(product_id)
@@ -144,8 +145,10 @@ def units_needed(product_id: str, amount: float, unit: str) -> UnitPlan:
         raise KeyError(product_id)
 
     content = units.content_from_product(r).get(unit)
-    price = _state.client.cached_price(r["id"]) if _state.client else None
-    if content is None or price is not None:
+    if unit == "PCS" and content is None:
+        raise units.UnitMismatch(f"{r['id']}: no piece count in the product data")
+    price = _state.client.cached_price(r["id"]) if _state.client and unit != "PCS" else None
+    if unit != "PCS" and (content is None or price is not None):
         if price is None:
             _client().offers([r["id"]], date.today())
             price = _client().cached_price(r["id"])

@@ -102,3 +102,10 @@ def test_missing_api_key_is_not_retryable(catalog_db, tmp_path, monkeypatch):
         assert (error["code"], error["retryable"]) == ("valio_api_unavailable", False)
     finally:
         api.configure()
+
+
+def test_pieces_of_real_milk_get_a_question_in_litres(svc):
+    hotel = svc.authenticate(issue_demo_mandates(svc.conn)["hotel"])
+    asked = svc.request_quote(hotel, ["464306"], 200, "PCS", MONDAY)
+    assert asked["status"] == "needs_clarification"
+    assert "litres" in asked["question"]

@@ -204,3 +204,12 @@ def test_a_broken_real_catalog_is_an_error_not_a_silent_fallback(tmp_path, monke
 def test_fake_catalog_is_used_while_the_real_one_does_not_exist(tmp_path, monkeypatch):
     monkeypatch.setattr(server_app, "REPO_ROOT", tmp_path)
     assert server_app.load_catalog() is fake_catalog
+
+
+async def test_a_unit_the_server_cannot_measure_in_reaches_the_server_and_gets_a_question():
+    async with Client(mcp) as client:
+        asked = await call(client, "request_quote", product_ids=["464201"], amount=200,
+                           unit="eggs", need_by=NEED_BY)
+        found = await call(client, "search_products", product="milk", amount=200, unit="eggs")
+    assert (asked["status"], asked["missing"]) == ("needs_clarification", ["unit"])
+    assert (found["status"], found["missing"]) == ("needs_clarification", ["unit"])
