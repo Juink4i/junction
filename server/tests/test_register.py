@@ -59,7 +59,7 @@ def signed(mandate=MANDATE, kid="aurinko-3f2a", key=None):
 
 
 def milk(svc, litres, need_by="2026-11-16"):
-    return svc.request_quote([{"product_id": "464201", "amount": litres, "unit": "L"}], need_by)
+    return svc.quote_lines([{"product_id": "464201", "amount": litres, "unit": "L"}], need_by)
 
 
 def buyers(svc):

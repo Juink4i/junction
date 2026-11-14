@@ -5,7 +5,7 @@ demo prices noted in the handoff.
 """
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from math import ceil
 
 
@@ -143,7 +143,9 @@ def units_needed(product_id: str, amount: float, unit: str) -> UnitPlan:
 def _offer(product_id: str, delivery_date: date) -> Offer:
     content, content_unit, price, model, cutoff_passed = _TERMS[product_id]
     now = datetime.now(timezone.utc)
-    closing = now - timedelta(hours=2) if cutoff_passed else now + timedelta(hours=6)
+    # Open until the end of the delivery day, so a test clock set anywhere before it sees an open cut-off.
+    closing = (now - timedelta(hours=2) if cutoff_passed else
+               datetime.combine(delivery_date, time(23, 59), tzinfo=timezone.utc))
     return Offer(
         product_id=product_id,
         unit_price_eur=price,

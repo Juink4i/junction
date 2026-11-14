@@ -13,15 +13,17 @@ from typing import Any, Callable
 
 import jwt
 
-from server import audit, signing, vocabulary
+from server import audit, ranking, signing, vocabulary
 from server.db import transaction
 from server.mandate import BUYER_ID, MandateError, check_mandate, verify_mandate
 from server.seller import KeywordSeller, Need, keyword_verdict
-from server.policy import decide, eur, period_start
+from server.policy import decide, eur, hard_stops, period_start
 from server.unusual import MODEL, THRESHOLD, flag_reason
 
 QUOTE_TTL = timedelta(minutes=15)
 CANDIDATE_LIMIT = 100  # the most products one search hands to the seller
+MAX_QUOTE_PRODUCTS = 40  # the most products one quote request prices
+MAX_OPTIONS = 5
 SUMMARY_FIELDS = ("id", "name_en", "name_fi", "category", "sales_unit", "tags", "labels")
 PRODUCT_FIELDS = SUMMARY_FIELDS + (
     "allergens_contains", "allergens_may_contain", "allergens_free_from", "allergen_info_missing",
@@ -262,7 +264,8 @@ class Service:
     # Quotes
 
     @locked
-    def request_quote(self, lines: list[dict], need_by: date | str, actor: str = "agent") -> dict:
+    def quote_lines(self, lines: list[dict], need_by: date | str, actor: str = "agent") -> dict:
+        """One signed quote for exactly these lines. The low-level builder; not a tool."""
         result = self._build_quote(lines, need_by)
         if "quote_id" in result:
             summary = "; ".join(f"{l['units']:,} × {l['name']} for {eur(l['line_total_eur'])}"
@@ -337,7 +340,7 @@ class Service:
         if "code" in offers and "retryable" in offers:
             return offers
 
-        quote_lines, total_with_tax = [], 0.0
+        quoted = []
         for product, plan in plans:
             offer = offers.get(product.id)
             if offer is None or not offer.orderable:
@@ -352,21 +355,43 @@ class Service:
                     f"{plan.covers:g} {plan.content_unit} asked for. Quote what is available and "
                     "cover the rest with a substitute." + self._substitute_hint(product, need_by),
                 )
-            quote_lines.append({
-                "product_id": product.id,
-                "name": product.name_en,
-                "units": plan.units,
-                "sales_unit": plan.sales_unit,
-                "covers": plan.covers,
-                "content_unit": plan.content_unit,
-                "unit_price_eur": offer.unit_price_eur,
-                "line_total_eur": round(plan.units * offer.unit_price_eur, 2),
-                "available_date": offer.available_date.isoformat() if offer.available_date else None,
-                "cutoff_passed": bool(offer.cutoff_passed),
-                "stock": "confirmed" if offer.available_units is not None else "unconfirmed",
-            })
-            total_with_tax += plan.units * offer.unit_price_with_tax_eur
+            quoted.append(ranking.Line(self._candidate(product, plan, offer), plan.units))
+        return self._issue_quote(quoted, need_by, now)
 
+    def _candidate(self, product: Any, plan: Any, offer: Any) -> ranking.Candidate:
+        """One product sized and priced, in the shape the ranking and the quote both use."""
+        return ranking.Candidate(
+            product_id=product.id, name=product.name_en, sales_unit=plan.sales_unit,
+            content_per_unit=plan.content_per_unit, content_unit=plan.content_unit, units=plan.units,
+            unit_price_eur=offer.unit_price_eur,
+            unit_price_with_tax_eur=offer.unit_price_with_tax_eur,
+            available_date=offer.available_date, closing_time=offer.closing_time,
+            cutoff_passed=bool(offer.cutoff_passed), available_units=offer.available_units,
+            reliability=product.delivery_reliability, country=product.country,
+            labels=tuple(product.labels), carbon=product.carbon_kg_per_kg)
+
+    def _issue_quote(self, lines: list[ranking.Line], need_by: date, now: datetime,
+                     buyer_id: str | None = None, set_id: str | None = None,
+                     rank: int | None = None, label: str | None = None) -> dict:
+        """Sign and store one quote for these lines."""
+        quote_lines, total_with_tax = [], 0.0
+        for line in lines:
+            c = line.candidate
+            quote_lines.append({
+                "product_id": c.product_id,
+                "name": c.name,
+                "units": line.units,
+                "sales_unit": c.sales_unit,
+                "covers": line.covers,
+                "content_unit": c.content_unit,
+                "unit_price_eur": c.unit_price_eur,
+                "line_total_eur": line.total_eur,
+                "available_date": c.available_date.isoformat() if c.available_date else None,
+                "cutoff_passed": c.cutoff_passed,
+                "closing_time": c.closing_time.isoformat(timespec="seconds") if c.closing_time else None,
+                "stock": "confirmed" if c.available_units is not None else "unconfirmed",
+            })
+            total_with_tax += line.units * c.unit_price_with_tax_eur
         body = {
             "quote_id": _new_id("q"),
             "lines": quote_lines,
@@ -376,10 +401,124 @@ class Service:
         }
         signature = signing.sign_quote(body, need_by, self.key)
         self.conn.execute(
-            "INSERT INTO quotes (quote_id, body_json, signature, created_at) VALUES (?, ?, ?, ?)",
-            (body["quote_id"], json.dumps(body), signature, now.isoformat()),
+            "INSERT INTO quotes (quote_id, body_json, signature, created_at, buyer_id, set_id, rank, "
+            "label) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (body["quote_id"], json.dumps(body), signature, now.isoformat(), buyer_id, set_id, rank,
+             label),
         )
         return {**body, "signature": signature}
+
+    def _forecast(self, quote: dict, need_by: date, buyer: Buyer, products: dict,
+                  history: list[dict], now: datetime):
+        """What Policy would decide for this quote now. Nothing is saved, and the Decisions
+        API is not asked. The decision at order time is the one that counts."""
+        return decide({**quote, "need_by": need_by.isoformat()}, buyer.mandate, products, history,
+                      None, self._spent_in_period(buyer.buyer_id, buyer.mandate, now, quote["quote_id"]),
+                      now)
+
+    @locked
+    def request_quote(self, buyer: Buyer, product_ids: list[str] | None, amount: float | None,
+                      unit: str | None, need_by: date | str | None,
+                      preferences: dict | None = None) -> dict:
+        """Ranked options for one need. Each option is its own signed quote."""
+        missing = [name for name, value in (("product_ids", product_ids), ("amount", amount),
+                                            ("unit", unit), ("need_by", need_by)) if not value]
+        if missing:
+            return self._ask(buyer, "request_quote", missing=missing,
+                             question="To price this I need: " + ", ".join(missing) + ". Give "
+                                      "product_ids from search_products, the amount and unit "
+                                      '("L" or "KG"), and need_by as a date like 2026-11-16.')
+
+        def refuse(problem: dict) -> dict:
+            self._log(buyer.actor, "request_quote", f"No quote given: {problem['message']}")
+            return problem
+
+        now = self.now()
+        try:
+            need_by = need_by if isinstance(need_by, date) else date.fromisoformat(str(need_by))
+        except ValueError:
+            return refuse(error("bad_date", "need_by must be a date like 2026-11-16."))
+        if need_by < now.date():
+            return refuse(error("need_by_in_past",
+                                f"The need-by date {need_by.isoformat()} is in the past."))
+        unit = str(unit).upper()
+        if unit not in ("L", "KG"):
+            return refuse(error("bad_unit", 'unit must be "L" (litres) or "KG" (kilograms).'))
+        if not (isinstance(amount, (int, float)) and not isinstance(amount, bool)
+                and amount > 0 and math.isfinite(amount)):
+            return refuse(error("bad_amount", "The amount must be a number above zero."))
+
+        ids = list(dict.fromkeys(str(i) for i in product_ids))[:MAX_QUOTE_PRODUCTS]
+        not_offered: list[dict] = []
+        products: dict[str, Any] = {}
+        for pid in ids:
+            product = self.catalog.get_product(pid)
+            if product is None:
+                not_offered.append({"product_id": pid, "name": None,
+                                    "reason": "Not in the Valio Aimo catalog."})
+                continue
+            # A product the mandate would reject outright is never offered.
+            stops = hard_stops({"lines": [{"product_id": pid, "name": product.name_en}]},
+                               buyer.mandate, {pid: product})
+            if stops:
+                not_offered.append({"product_id": pid, "name": product.name_en,
+                                    "reason": " ".join(stops)})
+                continue
+            products[pid] = product
+
+        # One price call and one availability call, before the unit maths, which reuses them.
+        offers = self._offers(list(products), need_by) if products else {}
+        if "code" in offers and "retryable" in offers:
+            return refuse(offers)
+
+        candidates = []
+        for pid, product in products.items():
+            offer = offers.get(pid)
+            if offer is None or not offer.orderable:
+                not_offered.append({"product_id": pid, "name": product.name_en,
+                                    "reason": f"Cannot be ordered for {need_by.isoformat()}."})
+                continue
+            try:
+                plan = self.catalog.units_needed(pid, amount, unit)
+            except Exception:
+                sold_by = "weight, not volume" if unit == "L" else "volume, not weight"
+                not_offered.append({"product_id": pid, "name": product.name_en,
+                                    "reason": f"It is sold by {sold_by}, so it cannot be ordered in {unit}."})
+                continue
+            candidates.append(self._candidate(product, plan, offer))
+
+        prefs = preferences or {}
+        ranked = ranking.rank(candidates, need_by, prefs.get("priorities"), prefs.get("pack_size"))
+        plans = ranking.options(ranked, amount, need_by, MAX_OPTIONS)
+        offered = {line.candidate.product_id for plan in plans for line in plan.lines}
+        for c in ranked:
+            if c.short and c.product_id not in offered:
+                in_stock = c.available_units * c.content_per_unit
+                not_offered.append({"product_id": c.product_id, "name": c.name,
+                                    "reason": f"Only {in_stock:g} {c.content_unit} is in stock, less "
+                                              f"than the {amount:g} {unit} asked for."})
+
+        set_id = _new_id("qs")
+        history = self._history(buyer.buyer_id)
+        options = []
+        for rank_no, plan in enumerate(plans, 1):
+            quote = self._issue_quote(list(plan.lines), need_by, now, buyer.buyer_id, set_id,
+                                      rank_no, plan.label)
+            decision = self._forecast(quote, need_by, buyer, products, history, now)
+            options.append({"rank": rank_no, "label": plan.label, "trade_off": plan.trade_off,
+                            "expected": {"status": decision.status, "reasons": decision.reasons},
+                            "quote": quote})
+            self._log(buyer.actor, "request_quote",
+                      f"Option {rank_no} of {len(plans)} ({plan.label}) for {buyer.name}: "
+                      f"{plan.trade_off} Total {eur(quote['total_eur'])} without VAT, valid for "
+                      "15 minutes. The stock hold is simulated.", quote_id=quote["quote_id"])
+        if not options:
+            self._log(buyer.actor, "request_quote",
+                      f"Nothing could be offered for {amount:g} {unit} by {need_by.isoformat()}: "
+                      f"{len(not_offered)} products were left out.")
+        return {"status": "ok", "set_id": set_id,
+                "asked": {"amount": amount, "unit": unit, "need_by": need_by.isoformat()},
+                "options": options, "not_offered": not_offered}
 
     # Orders
 
@@ -442,6 +581,8 @@ class Service:
 
         if quote_row is None:
             return self._refuse(quote_id, f"There is no quote with id {quote_id}. Request a new quote.")
+        if quote_row["buyer_id"] and quote_row["buyer_id"] != buyer_id:
+            return self._refuse(quote_id, "This quote was issued to another buyer.")
         quote = {**json.loads(quote_row["body_json"]), "signature": quote_row["signature"]}
         try:
             need_by = signing.check_quote(quote, self.key.public_key(), now)

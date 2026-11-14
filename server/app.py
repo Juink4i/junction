@@ -2,7 +2,7 @@
 
 import importlib
 import os
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -78,12 +78,6 @@ def _mandate_problem(token: str | None) -> dict[str, Any] | None:
     return None
 
 
-class QuoteLineRequest(BaseModel):
-    product_id: str
-    amount: float
-    unit: Literal["L", "KG"]
-
-
 @mcp.tool()
 def search_products(ctx: Context, product: str | None = None, must_have: list[str] | None = None,
                     amount: float | None = None,
@@ -118,18 +112,34 @@ def get_product(ctx: Context, product_id: str) -> dict[str, Any]:
     return service().get_product(product_id, actor=buyer.actor)
 
 
-@mcp.tool()
-def request_quote(ctx: Context, lines: list[QuoteLineRequest], need_by: date) -> dict[str, Any]:
-    """Price and delivery for the chosen products, as a signed quote valid for 15 minutes.
+class Preferences(BaseModel):
+    """The buyer's own order of what matters. Preferences only order products that already fit."""
+    priorities: list[str] | None = None  # any of: price, reliability, finnish, sustainability
+    pack_size: Literal["small", "large"] | None = None
 
-    amount is in litres ("L") or kilograms ("KG"); the server converts it to whole sales
-    units. Prices are in euros without VAT unless the field says with_tax. stock
+
+@mcp.tool()
+def request_quote(ctx: Context, product_ids: list[str] | None = None, amount: float | None = None,
+                  unit: Literal["L", "KG"] | None = None, need_by: str | None = None,
+                  preferences: Preferences | None = None) -> dict[str, Any]:
+    """Price the products from search_products and get ranked options to order.
+
+    Give every product id the search returned, the amount needed in litres ("L") or kilograms
+    ("KG"), and need_by as a date like 2026-11-16. The server converts the amount to whole
+    sales units, prices each product and ranks them: on time first, then the buyer's
+    preferences, or price, delivery date, reliability and sustainability.
+
+    The reply lists up to five options, best first. Each option is its own signed quote, valid
+    for 15 minutes, and says what the buyer's mandate would decide if it were ordered now.
+    Order one with place_order and its quote_id. Products that cannot be offered are listed
+    with the reason. Prices are in euros without VAT unless the field says with_tax. stock
     "unconfirmed" means Valio Aimo gave no real stock figure. The stock hold is simulated.
     """
     buyer, refused = _connect(ctx)
     if refused:
         return refused
-    return service().request_quote([line.model_dump() for line in lines], need_by, actor=buyer.actor)
+    return service().request_quote(buyer, product_ids, amount, unit, need_by,
+                                   preferences.model_dump() if preferences else None)
 
 
 @mcp.tool()

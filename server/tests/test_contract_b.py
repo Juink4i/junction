@@ -50,6 +50,7 @@ LINE_KEYS = {
     "line_total_eur",
     "available_date",
     "cutoff_passed",
+    "closing_time",
     "stock",
 }
 LOG_KEYS = {"seq", "time", "actor", "action", "reason", "prev_hash", "hash"}
@@ -80,8 +81,10 @@ async def call(client, name, **args):
 
 
 async def quote_milk(client, litres):
-    return await call(client, "request_quote", need_by=NEED_BY,
-                      lines=[{"product_id": "464201", "amount": litres, "unit": "L"}])
+    """The best option's quote for this much lactose-free milk."""
+    result = await call(client, "request_quote", product_ids=["464201"], amount=litres,
+                        unit="L", need_by=NEED_BY)
+    return result["options"][0]["quote"]
 
 
 async def test_server_name_and_exactly_six_tools():
@@ -98,7 +101,7 @@ async def test_tool_inputs_match_the_contract():
     assert inputs == {
         "search_products": ({"product", "must_have", "amount", "unit"}, set()),
         "get_product": ({"product_id"}, {"product_id"}),
-        "request_quote": ({"lines", "need_by"}, {"lines", "need_by"}),
+        "request_quote": ({"product_ids", "amount", "unit", "need_by", "preferences"}, set()),
         "place_order": ({"quote_id", "rationale", "agent_signature"}, {"quote_id", "rationale"}),
         "get_approval_status": ({"approval_id"}, {"approval_id"}),
         "get_audit_log": ({"order_id", "quote_id"}, set()),
@@ -128,13 +131,20 @@ async def test_get_product_unknown_id_returns_structured_error():
     assert set(error) == {"code", "message", "retryable"}
 
 
-async def test_request_quote_returns_quote():
+async def test_request_quote_returns_ranked_options():
     async with Client(mcp) as client:
-        quote = await quote_milk(client, 1000)
-    assert set(quote) == QUOTE_KEYS
-    assert all(set(line) == LINE_KEYS for line in quote["lines"])
-    assert quote["lines"][0]["stock"] in {"confirmed", "unconfirmed"}
-    assert quote["total_eur"] == 1560.0
+        result = await call(client, "request_quote", product_ids=["464201", "464179"], amount=1000,
+                            unit="L", need_by=NEED_BY)
+        asked = await call(client, "request_quote", product_ids=["464201"])
+    assert set(result) == {"status", "set_id", "asked", "options", "not_offered"}
+    best = result["options"][0]
+    assert set(best) == {"rank", "label", "trade_off", "expected", "quote"}
+    assert set(best["expected"]) == {"status", "reasons"}
+    assert set(best["quote"]) == QUOTE_KEYS
+    assert all(set(line) == LINE_KEYS for line in best["quote"]["lines"])
+    assert best["quote"]["lines"][0]["stock"] in {"confirmed", "unconfirmed"}
+    assert best["quote"]["total_eur"] == 1560.0
+    assert asked["status"] == "needs_clarification"
 
 
 async def test_order_approval_and_log_flow(tokens):

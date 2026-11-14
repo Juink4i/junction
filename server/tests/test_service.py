@@ -62,7 +62,7 @@ def tokens(svc):
 
 
 def milk(svc, litres, product_id="464201", need_by="2026-11-16"):
-    return svc.request_quote([{"product_id": product_id, "amount": litres, "unit": "L"}], need_by)
+    return svc.quote_lines([{"product_id": product_id, "amount": litres, "unit": "L"}], need_by)
 
 
 def count(svc, table):
@@ -113,7 +113,7 @@ def test_quote_for_more_than_the_stock_is_an_error_with_what_is_available(svc, c
     ([], "2026-11-16", "no_lines"),
 ])
 def test_bad_quote_requests_are_structured_errors(svc, lines, need_by, code):
-    error = svc.request_quote(lines, need_by)
+    error = svc.quote_lines(lines, need_by)
     assert set(error) == {"code", "message", "retryable"}
     assert error["code"] == code
 
@@ -200,7 +200,7 @@ def test_expired_mandate_is_rejected(svc, tokens, clock):
 
 
 def test_policy_rejection_creates_no_approval(svc, tokens):
-    quote = svc.request_quote([{"product_id": "460000", "amount": 10, "unit": "KG"}], "2026-11-16")
+    quote = svc.quote_lines([{"product_id": "460000", "amount": 10, "unit": "KG"}], "2026-11-16")
     result = svc.place_order(quote["quote_id"], tokens["school"], "Pancake day")
     assert result["status"] == "rejected"
     assert "approval_id" not in result

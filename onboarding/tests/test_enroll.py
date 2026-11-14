@@ -45,7 +45,7 @@ def test_enroll_registers_the_kitchen_and_saves_its_files(trade, svc, tmp_path):
     assert json.loads((folder / "profile.json").read_text()) == built.profile
     # The saved mandate is accepted by the server for a real order.
     token = (folder / "mandate.jwt").read_text()
-    quote = svc.request_quote([{"product_id": "464201", "amount": 40, "unit": "L"}], "2026-11-16")
+    quote = svc.quote_lines([{"product_id": "464201", "amount": 40, "unit": "L"}], "2026-11-16")
     assert svc.place_order(quote["quote_id"], token, "Weekly milk")["status"] == "confirmed"
 
 
@@ -104,7 +104,7 @@ def test_a_kitchen_enrolled_with_an_agent_key_needs_signed_orders(trade, svc, tm
     assert sorted(p.name for p in folder.iterdir()) == [
         "agent_key.pem", "buyer_key.pem", "mandate.jwt", "profile.json"]
     token = (folder / "mandate.jwt").read_text()
-    quote_id = svc.request_quote([{"product_id": "464201", "amount": 40, "unit": "L"}],
+    quote_id = svc.quote_lines([{"product_id": "464201", "amount": 40, "unit": "L"}],
                                  "2026-11-16")["quote_id"]
     assert svc.place_order(quote_id, token, "Weekly milk")["status"] == "rejected"
     # The agent signs {quote_id, mandate_id}. agent/ still adds confirm_unusual until it is updated.

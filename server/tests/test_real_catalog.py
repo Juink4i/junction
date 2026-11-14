@@ -41,7 +41,7 @@ def svc(valio):
 
 
 def quote(svc, product_id, litres):
-    return svc.request_quote([{"product_id": product_id, "amount": litres, "unit": "L"}], MONDAY)
+    return svc.quote_lines([{"product_id": product_id, "amount": litres, "unit": "L"}], MONDAY)
 
 
 def test_search_screens_the_real_lactose_free_milks(svc):
