@@ -8,6 +8,7 @@ are hard-coded here. It is always labelled "scripted" on screen.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Generator
 
@@ -90,6 +91,15 @@ def _eur(x: float) -> str:
     return f"€{x:,.2f}"
 
 
+_SHORT = re.compile(r"\((\w+)\) are available, which covers ([\d.,]+) (?:L|KG)")
+
+
+def _parse_short(message: str) -> tuple[str, float] | None:
+    """From the server's insufficient_stock message: (product id, amount still available)."""
+    m = _SHORT.search(message)
+    return (m.group(1), float(m.group(2).replace(",", ""))) if m else None
+
+
 def _usable(line: dict[str, Any], need_by: str) -> bool:
     return not line.get("cutoff_passed") and str(line.get("available_date", "9999")) <= need_by
 
@@ -129,45 +139,76 @@ def shopping_plan(req: ShoppingRequest, *, gullible: bool = False) -> Generator:
 
     lines = [{"product_id": p["id"], "amount": amount, "unit": req.unit} for p in candidates]
     compare = yield call("request_quote", {"lines": lines, "need_by": req.need_by}, say=say)
+    short: dict[str, float] = {}  # product id -> amount still available, from insufficient_stock
+    while compare.get("error", {}).get("code") == "insufficient_stock":
+        found_short = _parse_short(compare["error"]["message"])
+        if not found_short or found_short[0] in short:
+            break
+        short[found_short[0]] = found_short[1]
+        lines = [ln for ln in lines if ln["product_id"] != found_short[0]]
+        if not lines:
+            compare = {"lines": []}
+            break
+        compare = yield call("request_quote", {"lines": lines, "need_by": req.need_by},
+                            say=f"Only {found_short[1]:,.0f} {req.unit} of {found_short[0]} is left. "
+                                f"Comparing the other candidates.")
     if "error" in compare:
         yield text(f"I could not get prices: {compare['error'].get('message')}")
         return
 
     usable = [ln for ln in compare.get("lines", []) if _usable(ln, req.need_by)]
     usable.sort(key=lambda ln: (ln["covers"] < amount, ln["line_total_eur"] / max(ln["covers"], 1e-9)))
-    if not usable:
-        yield text("No candidate can arrive by the need-by date. A person needs to choose between a "
-                   "late delivery and a different product.")
-        return
 
+    # Fill the amount: what is left of short products first (they were the first choices),
+    # then the best on-time alternatives.
     chosen, still_needed = [], amount
+    for pid, available in short.items():
+        take = min(available, still_needed)
+        if take > 0:
+            chosen.append({"product_id": pid, "amount": take, "unit": req.unit})
+            still_needed -= take
     for ln in usable:
         if still_needed <= 0:
             break
         take = min(ln["covers"], still_needed)
-        chosen.append({"product_id": ln["product_id"], "amount": take, "unit": req.unit, "_line": ln})
+        chosen.append({"product_id": ln["product_id"], "amount": take, "unit": req.unit})
         still_needed -= take
+    if still_needed > 0 or not chosen:
+        yield text("Nothing on time covers the whole amount. A person needs to choose between a late "
+                   "delivery, a smaller order or a different product.")
+        return
 
-    labels = ["best", "better", "good"]
-    options = [dict(label=labels[i], product_id=ln["product_id"], name=ln["name"], units=ln["units"],
-                    sales_unit=ln["sales_unit"], covers=ln["covers"], content_unit=ln.get("content_unit"),
-                    total_eur=ln["line_total_eur"],
-                    available_date=ln["available_date"],
-                    trade_off=("covers the full amount" if ln["covers"] >= amount
-                               else f"only {ln['covers']:,.0f} {req.unit} available") +
-                              f", {_eur(ln['line_total_eur'] / max(ln['covers'], 1e-9))}/{req.unit}")
-               for i, ln in enumerate(usable[:3])]
     split = len(chosen) > 1
-    title = (f"Shortage: {chosen[0]['amount']:,.0f} {req.unit} available, rest from a substitute"
-             if split else f"Options for {amount:,.0f} {req.unit} {req.product}")
-    yield call("present_options", {"title": title, "options": options})
+    if not split:
+        labels = ["best", "better", "good"]
+        options = [dict(label=labels[i], product_id=ln["product_id"], name=ln["name"], units=ln["units"],
+                        sales_unit=ln["sales_unit"], covers=ln["covers"], content_unit=ln.get("content_unit"),
+                        total_eur=ln["line_total_eur"], available_date=ln["available_date"],
+                        trade_off=f"covers the full amount, "
+                                  f"{_eur(ln['line_total_eur'] / max(ln['covers'], 1e-9))}/{req.unit}")
+                   for i, ln in enumerate(usable[:3])]
+        yield call("present_options", {"title": f"Options for {amount:,.0f} {req.unit} {req.product}",
+                                       "options": options})
 
-    final_lines = [{k: v for k, v in c.items() if k != "_line"} for c in chosen]
-    quote = yield call("request_quote", {"lines": final_lines, "need_by": req.need_by})
+    quote = yield call("request_quote", {"lines": chosen, "need_by": req.need_by})
     if "error" in quote:
         yield text(f"The final quote failed: {quote['error'].get('message')}")
         return
-    names = " + ".join(f"{c['_line']['name']}" for c in chosen)
+    qlines = quote.get("lines", [])
+    if split:
+        first = qlines[0]
+        per_unit = lambda ln: ln["line_total_eur"] / max(ln["covers"], 1e-9)  # noqa: E731
+        options = [dict(label="split" if i == 0 else ("best", "better", "good")[min(i - 1, 2)],
+                        product_id=ln["product_id"], name=ln["name"], units=ln["units"],
+                        sales_unit=ln["sales_unit"], covers=ln["covers"], content_unit=ln.get("content_unit"),
+                        total_eur=ln["line_total_eur"], available_date=ln["available_date"],
+                        trade_off=(f"all that is left of the first choice" if i == 0 else
+                                   f"substitute, still {', '.join(req.must_have) or 'the same kind'}; "
+                                   f"{per_unit(ln) - per_unit(first):+.2f} €/{req.unit} vs. the first choice"))
+                   for i, ln in enumerate(qlines)]
+        yield call("present_options", {"title": f"Shortage: {qlines[0]['covers']:,.0f} {req.unit} left, "
+                                                f"the rest from a substitute", "options": options})
+    names = " + ".join(ln["name"] for ln in qlines)
     rationale = (f"Cheapest lactose-free milk that arrives by {req.need_by}: {names}."
                  + (" The first choice is short, so a lactose-free substitute fills the rest." if split else ""))
     order = yield call("place_order", {"quote_id": quote["quote_id"], "rationale": rationale})

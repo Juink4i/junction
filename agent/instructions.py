@@ -39,6 +39,8 @@ amount. Rank the lines:
    d. earliest delivery;
    e. then better delivery reliability, sustainability labels and lower carbon footprint.
    Stock marked "unconfirmed" is normal. Mention it, but don't treat it as a shortage.
+   If the quote fails with an insufficient_stock error, the message says which product is short \
+and how much of it is available. Note that, and ask again without that product to compare the rest.
 6. Show the options. Call present_options with up to three options (best, better, good), each \
 with a one-line trade-off.
 7. Order. Call request_quote again with only what you will buy, then place_order with that \
@@ -56,9 +58,10 @@ order to get around the decision.
 
 SUBSTITUTES = """\
 SHORTAGES AND SUBSTITUTES
-If the best product cannot cover the whole amount (a quote line covers less than you asked for), \
-cannot arrive in time, or its cut-off has passed:
-- Buy what it can cover and fill the rest with a substitute.
+If the best product cannot cover the whole amount (an insufficient_stock error, or a quote line \
+that covers less than you asked for), cannot arrive in time, or its cut-off has passed:
+- Buy what it can cover and fill the rest with a substitute. The insufficient_stock message may \
+name substitutes with the same tags that can arrive on time; start with those.
 - A substitute must do the same job and keep every must-have property of the request. For \
 lactose-free milk, that is another plain lactose-free milk; a different fat percentage or pack \
 size is fine.

@@ -28,12 +28,13 @@ You need [uv](https://docs.astral.sh/uv/). Put the four Valio Aimo files in `dat
 uv sync                                    # 1. install (Python 3.12)
 cp .env.example .env                       # 2. then add VALIO_API_KEY and GEMINI_API_KEY
 uv run python -m catalog.load              # 3. load the product file into data/catalog.db
-uv run python -m server                    # 4. trade server   → http://localhost:8000/mcp
-uv run python -m web                       # 5. screens        → http://localhost:8080
-uv run python demo/run.py                  # 6. play the five demo scenes
+uv run python -m server.make_mandate       # 4. signed demo mandates → server/mandates/*.jwt
+uv run python -m server                    # 5. trade server   → http://localhost:8000/mcp
+uv run python -m web                       # 6. screens        → http://localhost:8080
+uv run python demo/run.py                  # 7. play the five demo scenes
 ```
 
-Run steps 4, 5 and 6 in separate terminals. Step 6 opens the stage view. Open the approvals URL
+Run steps 5, 6 and 7 in separate terminals. Step 6 opens the stage view. Open the approvals URL
 it prints on a phone on the same Wi-Fi, or scan the QR code on the stage view.
 
 One request on its own:
@@ -106,7 +107,7 @@ What the code does around it (`agent/tools.py`):
 | `docs/` | team | The challenge, the plan, the work split and contracts |
 
 Settings: `TRADE_MCP_URL` (default `http://localhost:8000/mcp`), `TRADE_HTTP_URL` (default
-`http://localhost:8000`), `WEB_URL` (default `http://localhost:8080`), `AGENT_MODEL`. Mandate
-tokens are read from `data/mandates/<buyer>.jws`, or from `$MANDATE_TOKEN`.
+`http://localhost:8000`), `WEB_URL` (default `http://localhost:8080`), `AGENT_MODEL`. The agent
+reads its mandate from `server/mandates/<buyer>.jwt` (written by step 4), or from `$MANDATE_TOKEN`.
 
 The Valio Aimo data is synthetic and may only be used for this event.

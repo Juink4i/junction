@@ -105,7 +105,7 @@ MANDATES: dict[str, dict[str, Any]] = {
                        max_order_eur=1500, allowed_categories=["10400"], blocked_allergens=[],
                        unknown_allergens="human", usual_amount=400,
                        approver="procurement.manager@hotel.example"),
-    "demo-cafe": dict(key="cafe", buyer="Café Aalto", agent_id="buyer-agent-02",
+    "demo-cafe": dict(key="cafe", buyer="Café Kallio", agent_id="buyer-agent-02",
                       max_order_eur=300, allowed_categories=["10400"], blocked_allergens=[],
                       unknown_allergens="agent", usual_amount=20, approver="owner@cafe.example"),
     "demo-school": dict(key="school", buyer="Espoo School Kitchens", agent_id="buyer-agent-03",
@@ -257,6 +257,20 @@ def get_product(product_id: str) -> dict[str, Any]:
     return _details(product_id, p)
 
 
+def _substitute_hint(pid: str, need_by: date) -> str:
+    base = PRODUCTS[pid]
+    options = []
+    for other in PRODUCTS:
+        p = _product(other)
+        on_time = date.today() + timedelta(days=p["lead_days"]) <= need_by and not p["cutoff_passed"]
+        if other != pid and p["category"] == base["category"] and set(base["tags"]) <= set(p["tags"]) \
+                and on_time and not any(w in p["name_en"].lower() for w in ("coffee", "latte", "chocolate", "sour")):
+            options.append(f"{other} {p['name_en']} (€{p['unit_price'] / p['content']:.2f} per L)")
+    if not options:
+        return " No substitute with the same tags can arrive on time."
+    return " Substitutes with the same tags that can arrive on time: " + "; ".join(options[:3]) + "."
+
+
 @mcp.tool()
 def request_quote(lines: list[QuoteLineIn], need_by: date) -> dict[str, Any]:
     """Price and availability for the chosen lines, as a signed quote that expires in 15 minutes."""
@@ -272,7 +286,15 @@ def request_quote(lines: list[QuoteLineIn], need_by: date) -> dict[str, Any]:
         avail = p.get("available_units")
         if avail is not None:
             stock = "confirmed"
-            units = min(units, int(avail))
+            if int(avail) < units:  # same error and wording as the real server (server/service.py)
+                unit = _content_unit(p)
+                log("buyer agent", "request_quote", f"No quote given: only {avail} units of "
+                    f"{p['name_en']} available.")
+                return {"code": "insufficient_stock", "retryable": False, "message": (
+                    f"Only {avail} sales units of {p['name_en']} ({ln.product_id}) are available, which "
+                    f"covers {int(avail) * p['content']:g} {unit} of the {units * p['content']:g} {unit} "
+                    f"asked for. Quote what is available and cover the rest with a substitute."
+                    + _substitute_hint(ln.product_id, need_by))}
         available = date.today() + timedelta(days=p["lead_days"])
         out_lines.append(dict(
             product_id=ln.product_id, name=p["name_en"], units=units, sales_unit=p["sales_unit"],
@@ -289,6 +311,20 @@ def request_quote(lines: list[QuoteLineIn], need_by: date) -> dict[str, Any]:
     log("buyer agent", "request_quote", f"Quote {quote['quote_id']}: {len(out_lines)} line(s), "
         f"{_eur(total)} before tax, need by {need_by.isoformat()}.", refs=(quote["quote_id"],))
     return quote
+
+
+def _mandate_for(token: str) -> dict[str, Any] | None:
+    """Demo tokens, or a real mandate from server/make_mandate.py mapped by its "kid" (buyer id).
+
+    The fake does NOT verify signatures. The real server does.
+    """
+    if token in MANDATES:
+        return MANDATES[token]
+    try:
+        import jwt
+        return MANDATES.get(f"demo-{jwt.get_unverified_header(token).get('kid')}")
+    except Exception:
+        return None
 
 
 def _decide(quote: dict[str, Any], m: dict[str, Any], confirm_unusual: bool) -> tuple[str, list[str]]:
@@ -330,7 +366,7 @@ def _decide(quote: dict[str, Any], m: dict[str, Any], confirm_unusual: bool) -> 
 def place_order(quote_id: str, mandate_token: str, rationale: str,
                 confirm_unusual: bool = False) -> dict[str, Any]:
     """Order a quote. Plain code checks the quote and the buyer's mandate and decides the result."""
-    m = MANDATES.get(mandate_token)
+    m = _mandate_for(mandate_token)
     if m is None:
         log("policy", "place_order rejected", "The mandate is missing or its signature is not valid.",
             refs=(quote_id,))

@@ -51,7 +51,7 @@ def build_scenes(today: date | None = None) -> list[Scene]:
             hint="When the approval appears on the phone, tap Approve.", wait_s=300),
         Scene(
             key="b", title="2 · Ten times the usual",
-            subtitle="Café Aalto normally buys about 20 L. Today its agent asks for 200 L. The server "
+            subtitle="Café Kallio normally buys about 20 L. Today its agent asks for 200 L. The server "
                      "doesn't refuse and doesn't wave it through: it asks the agent to confirm.",
             buyer="cafe", request="We need 200 litres of lactose-free milk by Tuesday.",
             plan=ShoppingRequest("lactose-free milk", 200, "L", tuesday),
@@ -59,9 +59,10 @@ def build_scenes(today: date | None = None) -> list[Scene]:
             hint="The café confirms, so it goes to a person. Tap Approve on the phone.", wait_s=120),
         Scene(
             key="c", title="3 · Shortage",
-            subtitle="Only 700 L of the best milk is left. The agent buys those and fills the other "
-                     "300 L with a substitute that is still lactose-free.",
-            buyer="school", request="We need 1,000 litres of lactose-free milk by Monday for our school kitchens.",
+            subtitle="Next week the hotel orders again, but only 700 L of its usual milk is left. The "
+                     "agent buys those and fills the other 300 L with a substitute that is still "
+                     "lactose-free, as the hotel's mandate requires.",
+            buyer="hotel", request="Order 1,000 litres of lactose-free milk for Monday again, please.",
             plan=ShoppingRequest("lactose-free milk", 1000, "L", monday),
             overrides="shortage.json", hint="If an approval appears, tap Approve.", wait_s=180),
         Scene(

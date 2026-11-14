@@ -89,7 +89,7 @@
         <div class="why"><h3>Why it needs you</h3>
           <ul>${reasons.map((r) => `<li>${esc(r)}</li>`).join("") || "<li>The buyer's rules require a person.</li>"}</ul>
           <div class="src">Checked by the trade server's rules, not by the AI.</div></div>
-        ${a.rationale ? `<div class="agent"><h3>The agent's reason</h3><q>${esc(a.rationale)}</q></div>` : ""}
+        ${(a.agent_rationale ?? a.rationale) ? `<div class="agent"><h3>The agent's reason</h3><q>${esc(a.agent_rationale ?? a.rationale)}</q></div>` : ""}
         <div class="actions">
           <button class="btn reject" data-act="reject">Reject</button>
           <button class="btn approve" data-act="approve">Approve</button>

@@ -1,13 +1,14 @@
 [project]
-name = "valio-aimo-trade"
+name = "junction-valio-aimo"
 version = "0.1.0"
-description = "Trusted Trade Agents: an open MCP front door for Valio Aimo, plus a demo buyer agent."
+description = "Trusted Trade Agents: an MCP front door for Valio Aimo, plus a demo buyer agent"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "google-adk>=2.14.1",
     "httpx>=0.28.1",
     "mcp[cli]>=2.3.0",
+    "pyjwt[crypto]>=2.9",
     "python-dotenv>=1.2.4",
     "starlette>=1.10.0",
     "uvicorn>=0.54.0",

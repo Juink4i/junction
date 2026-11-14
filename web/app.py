@@ -71,10 +71,13 @@ def create_app(trade_http: str | None = None) -> Starlette:
         await app.state.http.aclose()
 
     async def forward(request: Request, method: str, path: str) -> Response:
+        # POST bodies pass through unchanged. With no decided_by, the server records the
+        # approver named in the buyer's mandate.
+        body = await request.body() if method == "POST" else None
+        headers = {"content-type": "application/json"} if body else None
         try:
-            res = await request.app.state.http.request(method, f"{trade}{path}",
-                                                       json={"decided_by": "approval page"}
-                                                       if method == "POST" else None)
+            res = await request.app.state.http.request(method, f"{trade}{path}", content=body,
+                                                       headers=headers)
         except httpx.HTTPError as exc:
             return JSONResponse({"code": "server_unreachable", "retryable": True,
                                  "message": f"The trade server at {trade} is not answering "

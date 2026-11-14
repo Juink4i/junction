@@ -14,11 +14,12 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parent.parent
-MANDATE_DIR = ROOT / "data" / "mandates"
+# Runner 2's server/make_mandate.py writes server/mandates/<buyer>.jwt.
+MANDATE_DIRS = (ROOT / "server" / "mandates", ROOT / "data" / "mandates")
 
 BUYERS = {
     "hotel": "Hotel Chain Oy / Helsinki Central",
-    "cafe": "Café Aalto",
+    "cafe": "Café Kallio",
     "school": "Espoo School Kitchens",
 }
 
@@ -47,17 +48,19 @@ class Settings:
 def load_mandate(buyer: str, explicit: str | None = None) -> tuple[str, str]:
     """Return (token, where it came from).
 
-    Order: an explicit file, $MANDATE_TOKEN, data/mandates/<buyer>.(jws|jwt|txt), and finally
-    the fake server's demo token. The real server rejects the demo token, which is correct.
+    Order: an explicit file, $MANDATE_TOKEN, server/mandates/<buyer>.jwt (from
+    `uv run python -m server.make_mandate`), data/mandates/<buyer>.*, and finally the fake
+    server's demo token. The real server rejects the demo token, which is correct.
     """
     if explicit:
         return Path(explicit).read_text().strip(), explicit
     if os.environ.get("MANDATE_TOKEN"):
         return os.environ["MANDATE_TOKEN"].strip(), "$MANDATE_TOKEN"
-    for ext in ("jws", "jwt", "txt"):
-        path = MANDATE_DIR / f"{buyer}.{ext}"
-        if path.exists():
-            return path.read_text().strip(), str(path.relative_to(ROOT))
+    for folder in MANDATE_DIRS:
+        for ext in ("jwt", "jws", "txt"):
+            path = folder / f"{buyer}.{ext}"
+            if path.exists():
+                return path.read_text().strip(), str(path.relative_to(ROOT))
     return f"demo-{buyer}", "demo token (fake server only)"
 
 
