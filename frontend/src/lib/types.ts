@@ -1,7 +1,8 @@
 // Shapes returned by the web/ backend-for-frontend. Only display data: the server decides.
 
-export type OrderStatus = 'confirmed' | 'needs_clarification' | 'pending_approval' | 'rejected'
-export type ApprovalStatus = 'pending' | 'approved' | 'rejected'
+// 'withdrawn': the agent ordered another option from the same request instead (web/accounts.py).
+export type OrderStatus = 'confirmed' | 'pending_approval' | 'rejected' | 'withdrawn'
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'withdrawn'
 
 export interface ApiError {
   code: string
@@ -77,7 +78,6 @@ export interface Order {
   created_at: string
   rationale: string
   reasons: string[]
-  question: string | null
   total_eur: number
   total_with_tax_eur: number
   lines: QuoteLine[]
@@ -162,6 +162,15 @@ export interface OptionCard {
   carbon_kg_per_kg?: number | null
 }
 
+/** Another option from the same request that would go through without a person. */
+export interface Alternative {
+  quote_id: string
+  rank: number
+  label: string
+  summary: string
+  total_eur: number
+}
+
 /** One agent event from /api/events/stream (agent/events.py). */
 export interface AgentEvent {
   id: number
@@ -182,6 +191,7 @@ export interface AgentEvent {
   options?: OptionCard[]
   status?: string
   reasons?: string[]
+  alternatives?: Alternative[]
   question?: string | null
   approval_id?: string | null
   order_id?: string | null

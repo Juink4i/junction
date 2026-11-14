@@ -1,6 +1,7 @@
 import { ArrowDown, Bot, Building2, Hourglass, UserRound } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
+import { Alternatives } from '@/components/feed'
 import { StatusBadge } from '@/components/status'
 import { Button } from '@/components/ui/button'
 import { useAccount } from '@/lib/account'
@@ -81,7 +82,7 @@ export function toChat(events: AgentEvent[]): Msg[] {
               {lines.map((r, i) => (
                 <p key={i}>{r}</p>
               ))}
-              {e.question && <p className="font-medium">{e.question}</p>}
+              <Alternatives items={e.alternatives} />
               {e.order_id && (
                 <Link to={`/client/orders/${e.order_id}`} className="inline-block text-xs font-medium text-primary hover:underline">
                   Follow the delivery →

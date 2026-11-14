@@ -35,7 +35,7 @@ export default function OpsOrders() {
       const p = orderPhase(o)
       c[p] = (c[p] ?? 0) + 1
       c.all += 1
-      if (p === 'awaiting_input' || p === 'awaiting_approval') c.open += 1
+      if (p === 'awaiting_approval') c.open += 1
     }
     return c
   }, [data, client])
@@ -44,7 +44,7 @@ export default function OpsOrders() {
     if (client !== 'all' && o.buyer_id !== client) return false
     const p = orderPhase(o)
     if (phase === 'all') return true
-    if (phase === 'open') return p === 'awaiting_input' || p === 'awaiting_approval'
+    if (phase === 'open') return p === 'awaiting_approval'
     return p === phase
   })
 

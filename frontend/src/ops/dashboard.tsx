@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, BadgeCheck, Bot, CircleHelp, Clock, Euro, Package, ShieldAlert, UserRound } from 'lucide-react'
+import { AlertTriangle, ArrowRight, BadgeCheck, Bot, Clock, Euro, Package, ShieldAlert, UserRound } from 'lucide-react'
 import { useMemo } from 'react'
 import { Link } from 'react-router'
 import { ErrorNote, PageHeader } from '@/components/common'
@@ -59,7 +59,7 @@ export default function OpsDashboard() {
         c.value += o.total_eur
         value += o.total_eur
       }
-      if (phase === 'awaiting_input' || phase === 'awaiting_approval') c.open += 1
+      if (phase === 'awaiting_approval') c.open += 1
       perClient.set(o.buyer_id, c)
     }
     const total = orders?.length ?? 0
@@ -68,7 +68,7 @@ export default function OpsDashboard() {
   }, [orders])
 
   const attention = (orders ?? [])
-    .filter((o) => o.status === 'pending_approval' || o.status === 'needs_clarification')
+    .filter((o) => o.status === 'pending_approval')
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
 
   const reasons = useMemo(() => {
@@ -123,13 +123,13 @@ export default function OpsDashboard() {
               {attention.slice(0, 6).map((o) => (
                 <li key={o.order_id}>
                   <Link to={`/server/orders/${o.order_id}`} className="flex items-start gap-3 px-5 py-3 hover:bg-muted/40">
-                    {o.status === 'needs_clarification' ? <CircleHelp className="mt-0.5 size-4 shrink-0 text-ask" /> : <UserRound className="mt-0.5 size-4 shrink-0 text-wait" />}
+                    <UserRound className="mt-0.5 size-4 shrink-0 text-wait" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 text-sm">
                         <span className="truncate font-medium">{o.buyer_name}</span>
                         <span className="ml-auto shrink-0 font-semibold tnum">{eur(o.total_eur)}</span>
                       </div>
-                      <div className="truncate text-xs text-muted-foreground">{o.question ?? o.reasons[0]}</div>
+                      <div className="truncate text-xs text-muted-foreground">{o.reasons[0]}</div>
                       <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
                         <Clock className="size-3" /> {ago(o.created_at)}
                       </div>

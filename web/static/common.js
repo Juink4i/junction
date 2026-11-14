@@ -77,6 +77,5 @@ const STATUS = {
   approved: { cls: "ok", icon: "✓", label: "Approved by a person" },
   pending_approval: { cls: "warn", icon: "👤", label: "Needs a person's approval" },
   pending: { cls: "warn", icon: "⏳", label: "Still waiting for approval" },
-  needs_clarification: { cls: "info", icon: "?", label: "Server asks the agent to confirm" },
   rejected: { cls: "bad", icon: "⛔", label: "Rejected" },
 };

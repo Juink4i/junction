@@ -18,6 +18,7 @@ from typing import Any
 import jwt
 
 from server.mandate import MandateError, verify_mandate
+from server.service import WITHDRAWN
 
 ACCOUNT_ORDER = ("hotel", "cafe", "school")
 LOG_FIELDS = ("seq", "time", "actor", "action", "reason", "prev_hash", "hash")
@@ -143,19 +144,22 @@ def _order(row: sqlite3.Row) -> dict:
     quote = json.loads(row["body_json"]) if row["body_json"] else {}
     lines = quote.get("lines", [])
     dates = [l["available_date"] for l in lines if l.get("available_date")]
+    reasons = json.loads(row["reasons_json"])
+    # The server stores a replaced order as rejected, with its approval closed by the agent.
+    # Shown as rejected, it would read as a person's or a rule's no.
+    withdrawn = row["status"] == "rejected" and WITHDRAWN in reasons
     approval = None
     if row["a_id"]:
-        approval = {"approval_id": row["a_id"], "status": row["a_status"],
+        approval = {"approval_id": row["a_id"], "status": "withdrawn" if withdrawn else row["a_status"],
                     "approvers": json.loads(row["approvers_json"]),
                     "decided_by": row["decided_by"], "decided_at": row["decided_at"]}
     return {
         "order_id": row["order_id"],
         "quote_id": row["quote_id"],
-        "status": row["status"],
+        "status": "withdrawn" if withdrawn else row["status"],
         "created_at": row["created_at"],
         "rationale": row["rationale"],
-        "reasons": json.loads(row["reasons_json"]),
-        "question": row["question"],
+        "reasons": reasons,
         "total_eur": quote.get("total_eur"),
         "total_with_tax_eur": quote.get("total_with_tax_eur"),
         "lines": lines,
@@ -244,11 +248,12 @@ def approval_belongs(conn: sqlite3.Connection, buyer_id: str, approval_id: str) 
 
 
 def buyer_log(conn: sqlite3.Connection, buyer_id: str) -> list[dict]:
-    """Log rows tied to this buyer's orders or the quotes those orders used."""
+    """Log rows tied to this buyer's orders or to any quote issued to it, ordered or not."""
     rows = conn.execute(
         "SELECT * FROM log WHERE order_id IN (SELECT order_id FROM orders WHERE buyer_id = ?) "
-        "OR quote_id IN (SELECT quote_id FROM orders WHERE buyer_id = ?) ORDER BY seq",
-        (buyer_id, buyer_id),
+        "OR quote_id IN (SELECT quote_id FROM orders WHERE buyer_id = ?) "
+        "OR quote_id IN (SELECT quote_id FROM quotes WHERE buyer_id = ?) ORDER BY seq",
+        (buyer_id, buyer_id, buyer_id),
     )
     return [{**{f: r[f] for f in LOG_FIELDS}, "order_id": r["order_id"], "quote_id": r["quote_id"]}
             for r in rows]

@@ -59,10 +59,10 @@ function useTheme(): [boolean, () => void] {
   ]
 }
 
-/** Orders waiting on a buyer (input or approval), across every client. */
+/** Orders waiting for a person's approval, across every client. */
 export function useOpenCount(): number {
   const { data } = usePoll<AdminOrder[]>('/admin/orders', 5000)
-  return (data ?? []).filter((o) => o.status === 'pending_approval' || o.status === 'needs_clarification').length
+  return (data ?? []).filter((o) => o.status === 'pending_approval').length
 }
 
 /** Valio Aimo's operations app: every client, every agent, the whole log. */

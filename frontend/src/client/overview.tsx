@@ -1,4 +1,4 @@
-import { ArrowRight, CircleHelp, MessagesSquare, Package } from 'lucide-react'
+import { MessagesSquare, Package } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { ApprovalList } from '@/components/approval-list'
@@ -35,9 +35,8 @@ export default function ClientOverview() {
   const { data: orders, error, loading, reload } = usePoll<Order[]>(buyerId ? accountPath(buyerId, '/orders') : null, 4000)
   const { events } = useEvents(buyerId)
   const run = useMemo(() => runView(events), [events])
-  const asking = (orders ?? []).filter((o) => o.status === 'needs_clarification')
   const m = account?.mandate
-  const waiting = pending + asking.length
+  const waiting = pending
   const [phase, setPhase] = useState<Phase | null>(null)
   const counts = useMemo(() => {
     const c = Object.fromEntries(PHASES.map((p) => [p.key, 0])) as Record<Phase, number>
@@ -66,18 +65,6 @@ export default function ClientOverview() {
       {waiting > 0 && (
         <Section title={`Needs you · ${waiting}`}>
           {(approvals?.length ?? 0) > 0 && <ApprovalList buyerId={buyerId} hideEmpty />}
-          {asking.map((o) => (
-            <Card key={o.order_id} className="flex-row items-start gap-3 border-ask/30 bg-ask-soft/40 p-4">
-              <CircleHelp className="mt-0.5 size-5 shrink-0 text-ask" aria-hidden />
-              <div className="min-w-0 flex-1 text-sm">
-                <div className="font-medium">Your agent needs you to confirm an amount</div>
-                <div className="text-muted-foreground">{o.question ?? o.reasons[0]}</div>
-                <Link to="/client/chat" className="mt-1 inline-flex items-center gap-1 font-medium text-primary hover:underline">
-                  See the conversation <ArrowRight className="size-3.5" />
-                </Link>
-              </div>
-            </Card>
-          ))}
         </Section>
       )}
 

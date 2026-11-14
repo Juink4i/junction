@@ -68,13 +68,15 @@ def mandates(conn: sqlite3.Connection, files: accounts.MandateFiles) -> dict[str
 
 
 def attributor(conn: sqlite3.Connection, by_buyer: dict[str, dict]) -> Callable[[sqlite3.Row], str | None]:
-    """Which buyer a log row belongs to: by its order, then its quote's order, then its actor.
+    """Which buyer a log row belongs to: by its order, then its quote, then its actor.
 
     The actor is matched against each mandate's agent_id, its approvers, and the buyer's
-    name (a registration is logged under the kitchen's name). Search and
-    get_product rows carry neither id, and their actor is the MCP client name, which is
-    "valio-buyer-agent" for every buyer, so those stay unattributed (None)."""
+    name (a registration is logged under the kitchen's name). Search and get_product rows
+    carry neither id; their actor is the mandate's agent_id. Rows by an actor that is no
+    mandate's agent, such as a refused connection, stay unattributed (None)."""
     by_order, by_quote = {}, {}
+    for q in conn.execute("SELECT quote_id, buyer_id FROM quotes WHERE buyer_id IS NOT NULL"):
+        by_quote[q["quote_id"]] = q["buyer_id"]
     for o in conn.execute("SELECT order_id, quote_id, buyer_id FROM orders"):
         by_order[o["order_id"]] = o["buyer_id"]
         by_quote[o["quote_id"]] = o["buyer_id"]

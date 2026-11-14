@@ -22,7 +22,6 @@ function actionTone(action: string): string {
   if (action.endsWith('confirmed') || action.endsWith('approved')) return 'text-ok'
   if (action.endsWith('rejected')) return 'text-stop'
   if (action.endsWith('pending_approval')) return 'text-wait'
-  if (action.endsWith('needs_clarification')) return 'text-ask'
   return 'text-foreground'
 }
 

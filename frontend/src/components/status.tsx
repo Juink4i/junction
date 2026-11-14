@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleHelp, Link2, Link2Off, OctagonX, UserRound } from 'lucide-react'
+import { CheckCircle2, CircleHelp, Link2, Link2Off, OctagonX, Undo2, UserRound } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { usePoll } from '@/lib/api'
 import { statusLabel } from '@/lib/pipeline'
@@ -8,15 +8,16 @@ import { cn } from '@/lib/utils'
 const STYLE: Record<string, { icon: typeof CheckCircle2; cls: string }> = {
   confirmed: { icon: CheckCircle2, cls: 'bg-ok-soft text-ok border-ok/25' },
   approved: { icon: CheckCircle2, cls: 'bg-ok-soft text-ok border-ok/25' },
-  needs_clarification: { icon: CircleHelp, cls: 'bg-ask-soft text-ask border-ask/25' },
   pending_approval: { icon: UserRound, cls: 'bg-wait-soft text-wait border-wait/25' },
   pending: { icon: UserRound, cls: 'bg-wait-soft text-wait border-wait/25' },
   rejected: { icon: OctagonX, cls: 'bg-stop-soft text-stop border-stop/25' },
+  withdrawn: { icon: Undo2, cls: 'bg-muted text-muted-foreground border-border' },
 }
+const UNKNOWN = { icon: CircleHelp, cls: 'bg-muted text-muted-foreground border-border' }
 
 /** The four outcomes, each with its own icon and label (never colour alone). */
 export function StatusBadge({ status, size = 'sm', className }: { status: string; size?: 'sm' | 'lg'; className?: string }) {
-  const s = STYLE[status] ?? { icon: CircleHelp, cls: 'bg-muted text-muted-foreground border-border' }
+  const s = STYLE[status] ?? UNKNOWN
   const Icon = s.icon
   return (
     <span
@@ -35,7 +36,7 @@ export function StatusBadge({ status, size = 'sm', className }: { status: string
 
 /** Full-width banner with the server's decision and its reasons, verbatim. */
 export function DecisionBanner({ status, reasons, children }: { status: string; reasons: string[]; children?: ReactNode }) {
-  const s = STYLE[status] ?? STYLE.needs_clarification
+  const s = STYLE[status] ?? UNKNOWN
   const Icon = s.icon
   return (
     <div className={cn('rounded-lg border p-3 sm:p-4', s.cls)} role="status">

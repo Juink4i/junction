@@ -1,14 +1,14 @@
 import { PHASES, type Phase } from '@/lib/pipeline'
 import { cn } from '@/lib/utils'
 
-const FLOW: Phase[] = ['awaiting_input', 'awaiting_approval', 'approved', 'shipping', 'completed']
+const FLOW: Phase[] = ['awaiting_approval', 'approved', 'shipping', 'completed']
 const SHORT: Record<Phase, string> = {
-  awaiting_input: 'Needs your answer',
   awaiting_approval: 'Needs your approval',
   approved: 'Approved',
   shipping: 'Arriving today',
   completed: 'Delivered',
   rejected: 'Rejected',
+  withdrawn: 'Withdrawn',
 }
 
 /**
@@ -30,7 +30,7 @@ export function OrderFlow({
       <ol className="flex" aria-label="Your orders by stage">
         {FLOW.map((p, i) => {
           const n = counts[p]
-          const wait = p === 'awaiting_input' || p === 'awaiting_approval'
+          const wait = p === 'awaiting_approval'
           const meta = PHASES.find((x) => x.key === p)!
           return (
             <li key={p} className="relative flex min-w-0 flex-1 flex-col items-center text-center">
@@ -70,6 +70,21 @@ export function OrderFlow({
           <span className="flex size-6 items-center justify-center rounded-full bg-stop text-xs font-semibold text-white tnum">{counts.rejected}</span>
           <span className="font-medium text-stop">Rejected</span>
           <span className="text-muted-foreground">· a rule was broken or you said no</span>
+        </button>
+      )}
+      {counts.withdrawn > 0 && (
+        <button
+          type="button"
+          onClick={() => pick('withdrawn')}
+          aria-pressed={selected === 'withdrawn'}
+          className={cn(
+            'flex w-full items-center gap-2 rounded-lg border bg-muted/50 px-3 py-2 text-left text-sm',
+            selected === 'withdrawn' && 'ring-2 ring-border',
+          )}
+        >
+          <span className="flex size-6 items-center justify-center rounded-full bg-muted-foreground text-xs font-semibold text-white tnum">{counts.withdrawn}</span>
+          <span className="font-medium">Withdrawn</span>
+          <span className="text-muted-foreground">· replaced by another option from the same request</span>
         </button>
       )}
       <p className="text-xs text-muted-foreground">Delivery stages follow Valio Aimo’s promised delivery date.</p>

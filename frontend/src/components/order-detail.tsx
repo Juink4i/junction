@@ -1,4 +1,4 @@
-import { ArrowLeft, CheckCircle2, CircleHelp, Clock, Hourglass, Leaf, OctagonX, Quote, Truck } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Clock, Hourglass, Leaf, OctagonX, Quote, Truck, Undo2 } from 'lucide-react'
 import { useMemo } from 'react'
 import { Link } from 'react-router'
 import { AllergenChips, ErrorNote, LineTags, TagChips } from '@/components/common'
@@ -13,14 +13,14 @@ import { deliverySteps, orderSteps, type Step } from '@/lib/pipeline'
 import type { Order } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-function heading(o: Order, buyerView?: boolean): { banner: string; sub: string; title: string; tone: 'go' | 'wait' | 'ask' | 'stop'; icon: typeof CheckCircle2 } {
+function heading(o: Order, buyerView?: boolean): { banner: string; sub: string; title: string; tone: 'go' | 'wait' | 'muted' | 'stop'; icon: typeof CheckCircle2 } {
   switch (o.status) {
     case 'confirmed':
       return { banner: 'Order confirmed', sub: 'Within the rules, or approved by a person. Sent to Valio Aimo.', title: buyerView ? 'Preparing your order' : 'Delivery scheduled', tone: 'go', icon: CheckCircle2 }
     case 'pending_approval':
       return { banner: 'Waiting for approval', sub: 'The server held this order for a person.', title: 'Not sent yet', tone: 'wait', icon: Hourglass }
-    case 'needs_clarification':
-      return { banner: 'Needs the buyer to confirm', sub: o.question ?? 'The amount looks unusual.', title: 'Not sent yet', tone: 'ask', icon: CircleHelp }
+    case 'withdrawn':
+      return { banner: 'Order withdrawn', sub: 'The agent ordered another option from the same request instead.', title: 'Not sent', tone: 'muted', icon: Undo2 }
     default:
       return { banner: 'Order rejected', sub: 'A rule was broken or a person said no. Nobody can override.', title: 'No delivery', tone: 'stop', icon: OctagonX }
   }
@@ -29,7 +29,7 @@ function heading(o: Order, buyerView?: boolean): { banner: string; sub: string; 
 const TONE = {
   go: 'border-go/30 bg-go-soft text-go',
   wait: 'border-wait/30 bg-wait-soft text-wait',
-  ask: 'border-ask/30 bg-ask-soft text-ask',
+  muted: 'border-border bg-muted text-muted-foreground',
   stop: 'border-stop/30 bg-stop-soft text-stop',
 }
 
@@ -185,7 +185,6 @@ export function OrderDetail({ apiPath, backTo, backLabel, withTrail, buyerView }
             ) : (
               <p className="text-sm text-muted-foreground">Within every rule of the mandate.</p>
             )}
-            {o.question && <div className="rounded-md border border-ask/25 bg-ask-soft p-2 text-sm">{o.question}</div>}
           </Card>
           {o.rationale && (
             <Card className="gap-2 p-5">

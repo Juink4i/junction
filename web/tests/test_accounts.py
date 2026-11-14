@@ -50,7 +50,6 @@ def test_orders_are_per_account(client, world):
     assert order["quote_id"] == world.hotel["quote_id"]
     assert order["rationale"] == "test hotel"
     assert order["reasons"] and isinstance(order["reasons"], list)
-    assert order["question"] is None
     assert order["total_eur"] == 1560.0
     assert order["total_with_tax_eur"] > order["total_eur"]
     assert order["lines"][0]["product_id"] == "464201"
@@ -173,6 +172,35 @@ def test_log_is_per_account(client, world):
     assert {r["quote_id"] for r in cafe} == cafe_quotes
     assert not {r["seq"] for r in cafe} & {r["seq"] for r in hotel}
     assert client.get("/api/accounts/school/log").json() == []
+
+
+def _options(world, buyer, litres):
+    svc = world.svc
+    return svc.request_quote(svc.authenticate(world.tokens[buyer]), ["464201", "463038"], litres,
+                             "L", NEED_BY)["options"]
+
+
+def test_log_shows_every_option_quoted_not_only_the_ordered_one(client, world):
+    options = _options(world, "school", 20)
+    assert len(options) >= 2
+    logged = {r["quote_id"] for r in client.get("/api/accounts/school/log").json()}
+    assert {o["quote"]["quote_id"] for o in options} <= logged
+    assert not logged & {r["quote_id"] for r in client.get("/api/accounts/cafe/log").json()}
+
+
+def test_an_order_replaced_by_another_option_is_withdrawn_not_rejected(client, world):
+    token = world.tokens["hotel"]
+    first, second = (o["quote"]["quote_id"] for o in _options(world, "hotel", 1000)[:2])
+    waiting = world.svc.place_order(first, token, "first choice")
+    assert waiting["status"] == "pending_approval"
+    assert world.svc.place_order(second, token, "the other option")["status"] != "rejected"
+
+    order = client.get(f"/api/accounts/hotel/orders/{waiting['order_id']}").json()
+    assert order["status"] == "withdrawn"
+    assert order["approval"]["status"] == "withdrawn"
+    listed = {o["order_id"]: o["status"] for o in client.get("/api/accounts/hotel/orders").json()}
+    assert listed[waiting["order_id"]] == "withdrawn"
+    assert world.hotel["order_id"] in listed and listed[world.hotel["order_id"]] == "pending_approval"
 
 
 def test_new_writes_show_up(client, world):

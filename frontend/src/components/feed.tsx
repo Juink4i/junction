@@ -2,28 +2,30 @@ import { ArrowDown, Bot, Clapperboard, CornerDownRight, HelpCircle, Hourglass, L
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { eur, num, pct, shortDate, timeOf, unitsBothWays } from '@/lib/format'
-import type { AgentEvent, OptionCard } from '@/lib/types'
+import type { AgentEvent, Alternative, OptionCard } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { DecisionBanner } from './status'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v)
 
+const amountOf = (args: Obj) => (args.amount != null ? `${num(Number(args.amount))} ${args.unit ?? ''}`.trim() : null)
+
 export function argsSummary(tool: string, args: Obj | undefined): string {
   if (!args) return ''
-  if (tool === 'request_quote' && Array.isArray(args.lines)) {
-    const lines = (args.lines as Obj[]).map((l) => `${l.product_id} · ${num(Number(l.amount))} ${l.unit}`).join(', ')
-    return `${lines}${args.need_by ? ` · by ${args.need_by}` : ''}`
+  if (tool === 'request_quote' && Array.isArray(args.product_ids)) {
+    const n = args.product_ids.length
+    return [`${n} ${n === 1 ? 'product' : 'products'}`, amountOf(args), args.need_by ? `by ${args.need_by}` : null]
+      .filter(Boolean)
+      .join(' · ')
   }
   if (tool === 'search_products') {
-    const parts = [args.text ? `"${args.text}"` : null, args.category, ...((args.must_have_tags as string[]) ?? [])]
+    const parts = [args.product ? `"${args.product}"` : null, ...((args.must_have as string[]) ?? []), amountOf(args)]
     return parts.filter(Boolean).join(' · ')
   }
-  if (tool === 'place_order') {
-    return [args.quote_id, args.confirm_unusual ? 'confirm_unusual' : null].filter(Boolean).join(' · ')
-  }
+  if (tool === 'place_order') return String(args.quote_id ?? '')
   return Object.entries(args)
-    .filter(([k]) => k !== 'mandate_token')
+    .filter(([k]) => k !== 'mandate_token' && k !== 'agent_signature')
     .map(([, v]) => (typeof v === 'object' ? JSON.stringify(v) : String(v)))
     .join(' · ')
     .slice(0, 120)
@@ -34,10 +36,16 @@ export function resultSummary(tool: string, result: unknown): string {
   if (isObj(result) && 'code' in result && 'message' in result) return String(result.message)
   if (Array.isArray(result)) return `${result.length} ${tool === 'search_products' ? 'products' : 'items'}`
   if (isObj(result)) {
-    if (Array.isArray(result.products)) return `${result.products.length} products`
-    if (tool === 'request_quote' && result.quote_id) {
-      const n = Array.isArray(result.lines) ? result.lines.length : 0
-      return `quote ${result.quote_id} · ${n} ${n === 1 ? 'line' : 'lines'} · ${eur(Number(result.total_eur))}`
+    if (result.status === 'needs_clarification') return `asks: ${String(result.question ?? 'a question')}`
+    if (Array.isArray(result.products)) {
+      const dropped = Array.isArray(result.dropped) ? result.dropped.length : 0
+      return `${result.products.length} products${dropped ? ` · ${dropped} left out` : ''}`
+    }
+    if (tool === 'request_quote' && Array.isArray(result.options)) {
+      const n = result.options.length
+      const best = isObj(result.options[0]) && isObj(result.options[0].quote) ? result.options[0].quote : null
+      if (!best) return 'nothing could be offered'
+      return `${n} signed ${n === 1 ? 'option' : 'options'} · best ${eur(Number(best.total_eur))}`
     }
     if (tool === 'get_product' && (result.name_en || result.name)) return String(result.name_en ?? result.name)
     if (result.status) return String(result.status)
@@ -98,6 +106,25 @@ function Options({ title, options }: { title?: string; options: OptionCard[] }) 
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+/** Other options from the same request that would go through without a person. */
+export function Alternatives({ items }: { items?: Alternative[] }) {
+  if (!items?.length) return null
+  return (
+    <div className="mt-2 rounded-md border border-go/25 bg-go-soft/40 p-2.5 text-sm text-foreground">
+      <div className="mb-1 text-xs font-semibold text-go">Would go through without a person</div>
+      <ul className="space-y-0.5">
+        {items.map((a) => (
+          <li key={a.quote_id} className="flex items-baseline gap-2">
+            <span className="text-[11px] font-semibold tracking-wide text-go uppercase">{a.label}</span>
+            <span className="min-w-0 flex-1">{a.summary}</span>
+            <span className="font-medium tnum">{eur(a.total_eur)}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -187,7 +214,9 @@ export function EventRow({ e, big }: { e: AgentEvent; big?: boolean }) {
       }
       return (
         <DecisionBanner status={s} reasons={e.reasons ?? []}>
-          {e.question && <div className="mt-2 pl-7 text-sm font-medium">{e.question}</div>}
+          <div className="pl-7">
+            <Alternatives items={e.alternatives} />
+          </div>
         </DecisionBanner>
       )
     }

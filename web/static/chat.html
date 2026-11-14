@@ -33,7 +33,8 @@
     .decision .top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .decision .status { font-weight: 700; font-size: 15px; }
     .decision ul { margin: 8px 0 0; padding-left: 20px; font-size: 14px; }
-    .decision .q { margin-top: 8px; font-size: 14px; font-style: italic; }
+    .decision .alt { margin-top: 8px; font-size: 14px; }
+    .decision .alt ul { margin-top: 4px; }
     .decision.ok { border-color: var(--ok); } .decision.ok .status { color: var(--ok); }
     .decision.warn { border-color: var(--warn); } .decision.warn .status { color: var(--warn); }
     .decision.info { border-color: var(--info); } .decision.info .status { color: var(--info); }
@@ -101,6 +102,7 @@
 
     function resultSummary(tool, r) {
       if (r && r.error) return { text: `${r.error.code}: ${r.error.message}`, err: true };
+      if (r && r.status === "needs_clarification") return { text: `asks: ${r.question ?? "a question"}` };
       if (tool === "search_products") {
         const items = Array.isArray(r) ? r : (r.products ?? []);
         const names = items.slice(0, 3).map((p) => p.name_en || p.name_fi);
@@ -108,8 +110,11 @@
       }
       if (tool === "get_product") return { text: `${r.id} ${r.name_en ?? ""}` };
       if (tool === "request_quote") {
-        const lines = (r.lines ?? []).map((l) => `${num(l.units)} × ${l.sales_unit} ${l.name} (${num(l.covers)} ${l.content_unit}) ${eur(l.line_total_eur)}${l.cutoff_passed ? " · cut-off passed" : ""}`);
-        return { text: `quote ${r.quote_id} · ${eur(r.total_eur)} — ${lines.join("; ")}` };
+        const options = r.options ?? [];
+        if (!options.length) return { text: "nothing could be offered" };
+        const best = options[0].quote;
+        const lines = (best.lines ?? []).map((l) => `${num(l.units)} × ${l.sales_unit} ${l.name} (${num(l.covers)} ${l.content_unit})${l.cutoff_passed ? " · cut-off passed" : ""}`);
+        return { text: `${options.length} signed option${options.length === 1 ? "" : "s"} · best ${eur(best.total_eur)} — ${lines.join(" + ")}` };
       }
       if (tool === "place_order") return { text: `${r.status}` };
       if (tool === "get_approval_status") return { text: `${r.status}${r.decided_by ? " by " + r.decided_by : ""}` };
@@ -206,7 +211,8 @@
         add(div(`decision ${s.cls}`, `<div class="top">${src}
           <span class="status">${s.icon} ${esc(label)}</span>${by}</div>
           ${(e.reasons ?? []).length ? `<ul>${e.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
-          ${e.question ? `<div class="q">Server asks: “${esc(e.question)}”</div>` : ""}`));
+          ${(e.alternatives ?? []).length ? `<div class="alt">Would go through without a person:<ul>${e.alternatives.map((a) =>
+            `<li>${esc(a.label)}: ${esc(a.summary)} · ${eur(a.total_eur)}</li>`).join("")}</ul></div>` : ""}`));
       },
       verify(e) {
         add(div(`verify ${e.ok ? "ok" : "bad"}`, e.ok

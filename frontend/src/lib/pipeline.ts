@@ -1,7 +1,7 @@
 // Turns server data into display steps. Only maps what already happened to a picture;
 // whether an order is allowed is decided by the trade server, never here.
 
-import type { AgentEvent, Order, OptionCard } from './types'
+import type { AgentEvent, Alternative, Order, OptionCard } from './types'
 
 export type StepState = 'todo' | 'active' | 'done' | 'skipped' | 'stopped'
 
@@ -24,7 +24,7 @@ export interface RunView {
   steps: Step[]
   quote: QuoteView | null
   options: { title?: string; options: OptionCard[] } | null
-  decision: { status: string; reasons: string[]; question?: string | null; order_id?: string | null } | null
+  decision: { status: string; reasons: string[]; alternatives?: Alternative[]; order_id?: string | null } | null
   finished: boolean
 }
 
@@ -38,11 +38,16 @@ export interface QuoteView {
 
 const SHOP_TOOLS = new Set(['record_request', 'search_products', 'get_product'])
 
-function asQuote(result: unknown): QuoteView | null {
-  if (result && typeof result === 'object' && 'quote_id' in result && 'lines' in result) {
-    return result as QuoteView
-  }
-  return null
+type Obj = Record<string, unknown>
+const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v)
+
+/** The signed quotes in a request_quote reply: one per ranked option, best first. */
+export function quotesOf(result: unknown): QuoteView[] {
+  if (!isObj(result) || !Array.isArray(result.options)) return []
+  return result.options
+    .map((o) => (isObj(o) && isObj(o.quote) ? o.quote : null))
+    .filter((q): q is Obj => !!q && typeof q.quote_id === 'string' && Array.isArray(q.lines))
+    .map((q) => q as unknown as QuoteView)
 }
 
 /** Events of the most recent run (plus the scene card that introduced it). */
@@ -81,6 +86,7 @@ export function runView(all: AgentEvent[]): RunView {
   let rulesDetail = "Checks the order against the buyer's signed mandate."
   let personDetail = 'Only needed when the rules say so.'
   let searches = 0
+  const quoted = new Map<string, QuoteView>()
 
   for (const e of events) {
     switch (e.kind) {
@@ -115,16 +121,21 @@ export function runView(all: AgentEvent[]): RunView {
           compare = 'done'
           rules = 'active'
           rulesDetail = 'Checking limits, categories, allergens and delivery date.'
+          const ordered = quoted.get(String(e.args?.quote_id ?? ''))
+          if (ordered) view.quote = ordered
         }
         break
       case 'tool_result':
         if (e.tool === 'request_quote') {
-          const q = asQuote(e.result)
-          if (q) {
-            view.quote = q
-            compareDetail = `Signed quote ${q.quote_id}, valid 15 minutes.`
+          const quotes = quotesOf(e.result)
+          for (const q of quotes) quoted.set(q.quote_id, q)
+          if (quotes.length > 0) {
+            view.quote = quotes[0]
+            compareDetail = `${quotes.length} signed ${quotes.length === 1 ? 'option' : 'options'}, valid 15 minutes.`
+          } else if (isObj(e.result) && e.result.status === 'needs_clarification') {
+            compareDetail = 'Valio Aimo asked the agent a question first.'
           } else {
-            compareDetail = 'No quote: the agent is trying another way.'
+            compareDetail = 'Nothing could be offered: the agent is trying another way.'
           }
         }
         break
@@ -154,13 +165,10 @@ export function runView(all: AgentEvent[]): RunView {
           compare = 'done'
           rules = s === 'rejected' ? 'stopped' : 'done'
           rulesDetail = (e.reasons ?? [])[0] ?? statusLabel(s)
-          view.decision = { status: s, reasons: e.reasons ?? [], question: e.question, order_id: e.order_id }
+          view.decision = { status: s, reasons: e.reasons ?? [], alternatives: e.alternatives ?? [], order_id: e.order_id }
           if (s === 'pending_approval') {
             person = 'active'
             personDetail = 'Waiting for a person to approve.'
-          } else if (s === 'needs_clarification') {
-            person = 'active'
-            personDetail = 'The buyer must confirm the amount.'
           } else if (person === 'todo' || person === 'active') {
             person = 'skipped'
             personDetail = s === 'confirmed' ? 'Not needed: within the mandate.' : 'Not possible: a hard rule was broken.'
@@ -202,9 +210,9 @@ export function statusLabel(status: string): string {
   return (
     {
       confirmed: 'Confirmed',
-      needs_clarification: 'Needs clarification',
       pending_approval: 'Pending approval',
       rejected: 'Rejected',
+      withdrawn: 'Withdrawn',
       approved: 'Approved',
       pending: 'Pending',
     } as Record<string, string>
@@ -231,6 +239,7 @@ export function orderSteps(order: Order, today: Date = new Date()): Step[] {
     },
   ]
 
+  const withdrawn = status === 'withdrawn'
   const rulesStopped = !approval && status === 'rejected'
   steps.push({
     key: 'rules',
@@ -241,7 +250,16 @@ export function orderSteps(order: Order, today: Date = new Date()): Step[] {
     time: decidedAt,
   })
 
-  if (approval) {
+  if (withdrawn) {
+    steps.push({
+      key: 'approval',
+      title: 'Approval',
+      who: 'person',
+      state: 'skipped',
+      detail: 'Withdrawn: the agent ordered another option from the same request.',
+      time: approval?.decided_at,
+    })
+  } else if (approval) {
     steps.push({
       key: 'approval',
       title: 'Approval',
@@ -252,14 +270,6 @@ export function orderSteps(order: Order, today: Date = new Date()): Step[] {
           ? `Waiting for ${approval.approvers[0] ?? 'a person'}.`
           : `${statusLabel(approval.status)} by ${approval.decided_by ?? 'a person'}.`,
       time: approval.decided_at,
-    })
-  } else if (status === 'needs_clarification') {
-    steps.push({
-      key: 'approval',
-      title: 'Buyer confirms',
-      who: 'person',
-      state: 'active',
-      detail: order.question ?? 'The buyer must confirm the amount.',
     })
   } else {
     steps.push({
@@ -276,8 +286,14 @@ export function orderSteps(order: Order, today: Date = new Date()): Step[] {
     key: 'confirmed',
     title: 'Order placed',
     who: 'valio',
-    state: confirmed ? 'done' : status === 'rejected' ? 'stopped' : 'todo',
-    detail: confirmed ? 'Sent to Valio Aimo.' : status === 'rejected' ? 'Not sent. Nobody can override.' : 'Not yet.',
+    state: confirmed ? 'done' : withdrawn ? 'skipped' : status === 'rejected' ? 'stopped' : 'todo',
+    detail: confirmed
+      ? 'Sent to Valio Aimo.'
+      : withdrawn
+        ? 'Not sent: replaced by another option.'
+        : status === 'rejected'
+          ? 'Not sent. Nobody can override.'
+          : 'Not yet.',
     time: confirmed ? (approval?.decided_at ?? decidedAt) : null,
   })
 
@@ -288,7 +304,7 @@ export function orderSteps(order: Order, today: Date = new Date()): Step[] {
     title: arrived ? 'Delivery date passed' : 'Delivery',
     who: 'valio',
     state: !confirmed ? 'todo' : arrived ? 'done' : 'active',
-    detail: status === 'rejected' ? 'No delivery.' : !confirmed ? 'Once the order is placed.' : arrives ? `Arrives ${arrives}` : 'Date not given.',
+    detail: status === 'rejected' || withdrawn ? 'No delivery.' : !confirmed ? 'Once the order is placed.' : arrives ? `Arrives ${arrives}` : 'Date not given.',
     time: null,
   })
   return steps
@@ -302,21 +318,20 @@ export function deliverySteps(order: Order): Step[] {
   const { status, approval } = order
   const confirmed = status === 'confirmed'
   const rejected = status === 'rejected'
+  const withdrawn = status === 'withdrawn'
   const confirmingDetail = confirmed
     ? approval?.decided_by
       ? `Approved by ${approval.decided_by}.`
       : 'Within your rules.'
-    : rejected
+    : rejected || withdrawn
       ? (order.reasons.at(-1) ?? 'Rejected.')
-      : status === 'needs_clarification'
-        ? 'Waiting for you to confirm the amount.'
-        : `Waiting for approval${approval?.approvers?.[0] ? ` from ${approval.approvers[0]}` : ''}.`
+      : `Waiting for approval${approval?.approvers?.[0] ? ` from ${approval.approvers[0]}` : ''}.`
   return [
     {
       key: 'confirming',
       title: 'Confirming order',
       who: 'code',
-      state: confirmed ? 'done' : rejected ? 'stopped' : 'active',
+      state: confirmed ? 'done' : rejected ? 'stopped' : withdrawn ? 'skipped' : 'active',
       detail: confirmingDetail,
       time: confirmed ? (approval?.decided_at ?? order.created_at) : null,
     },
@@ -325,7 +340,7 @@ export function deliverySteps(order: Order): Step[] {
       title: 'Preparing order',
       who: 'valio',
       state: confirmed ? 'active' : 'todo',
-      detail: confirmed ? 'Valio Aimo is preparing it.' : rejected ? 'Not sent.' : 'Once the order is confirmed.',
+      detail: confirmed ? 'Valio Aimo is preparing it.' : rejected || withdrawn ? 'Not sent.' : 'Once the order is confirmed.',
     },
     {
       key: 'out',
@@ -348,15 +363,15 @@ export function deliverySteps(order: Order): Step[] {
 // Where an order is in its life, for the operations dashboard. "Shipping" and
 // "completed" follow Valio Aimo's promised delivery date: there is no live tracking.
 
-export type Phase = 'awaiting_input' | 'awaiting_approval' | 'approved' | 'shipping' | 'completed' | 'rejected'
+export type Phase = 'awaiting_approval' | 'approved' | 'shipping' | 'completed' | 'rejected' | 'withdrawn'
 
 export const PHASES: { key: Phase; label: string; hint: string }[] = [
-  { key: 'awaiting_input', label: 'Awaiting buyer input', hint: 'The server asked the buyer to confirm an unusual amount.' },
   { key: 'awaiting_approval', label: 'Awaiting approval', hint: 'Outside the mandate: a person at the buyer must approve.' },
   { key: 'approved', label: 'Approved', hint: 'Confirmed; delivery date still ahead.' },
   { key: 'shipping', label: 'Shipping today', hint: 'Confirmed; the promised delivery date is today.' },
   { key: 'completed', label: 'Completed', hint: 'Confirmed; the promised delivery date has passed.' },
   { key: 'rejected', label: 'Rejected', hint: 'A hard rule was broken or a person said no.' },
+  { key: 'withdrawn', label: 'Withdrawn', hint: 'Replaced: the agent ordered another option from the same request.' },
 ]
 
 function localDay(d: Date): string {
@@ -364,9 +379,9 @@ function localDay(d: Date): string {
 }
 
 export function orderPhase(order: Pick<Order, 'status' | 'delivery_date'>, today: Date = new Date()): Phase {
-  if (order.status === 'needs_clarification') return 'awaiting_input'
   if (order.status === 'pending_approval') return 'awaiting_approval'
   if (order.status === 'rejected') return 'rejected'
+  if (order.status === 'withdrawn') return 'withdrawn'
   const day = localDay(today)
   if (!order.delivery_date || order.delivery_date > day) return 'approved'
   return order.delivery_date === day ? 'shipping' : 'completed'
