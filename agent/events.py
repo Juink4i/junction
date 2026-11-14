@@ -103,10 +103,11 @@ def summarize_result(tool: str, result: Any) -> str:
     """One readable line for a tool result."""
     if isinstance(result, dict) and "error" in result:
         return f"error {result['error'].get('code')}: {result['error'].get('message')}"
-    if tool == "search_products" and isinstance(result, dict):
-        names = [p.get("name_en") or p.get("name_fi") for p in result.get("products", [])][:4]
-        more = "…" if result.get("count", 0) > 4 else ""
-        return f"{result.get('count', 0)} products: " + "; ".join(n for n in names if n) + more
+    if tool == "search_products" and isinstance(result, (list, dict)):
+        items = result if isinstance(result, list) else result.get("products", [])
+        names = [p.get("name_en") or p.get("name_fi") for p in items if isinstance(p, dict)][:4]
+        more = "…" if len(items) > 4 else ""
+        return f"{len(items)} products: " + "; ".join(n for n in names if n) + more
     if tool == "get_product" and isinstance(result, dict):
         return f"{result.get('id')} {result.get('name_en')}"
     if tool == "request_quote" and isinstance(result, dict):
@@ -117,8 +118,9 @@ def summarize_result(tool: str, result: Any) -> str:
     if tool == "get_approval_status" and isinstance(result, dict):
         who = f" by {result['decided_by']}" if result.get("decided_by") else ""
         return f"{result.get('status')}{who}"
-    if tool == "get_audit_log" and isinstance(result, dict):
-        return f"{len(result.get('entries', []))} log entries"
+    if tool == "get_audit_log" and isinstance(result, (list, dict)):
+        items = result if isinstance(result, list) else result.get("entries", [])
+        return f"{len(items)} log entries"
     return _short(result)
 
 

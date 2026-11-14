@@ -21,6 +21,26 @@ MAX_LLM_CALLS = 40
 logging.getLogger("google_adk.google.adk.telemetry").setLevel(logging.ERROR)
 
 
+def check_model(model: str) -> str | None:
+    """None if the Gemini model can be used with this key, otherwise a plain explanation.
+
+    One tiny generation (a retired model can still be listed but refuse to generate), so a
+    wrong model fails before the demo starts instead of in the middle of a scene.
+    """
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client()  # keep a reference: a garbage-collected client closes its connection
+    try:
+        client.models.generate_content(model=model, contents="Reply with OK.",
+                                       config=types.GenerateContentConfig(max_output_tokens=8))
+        return None
+    except Exception as exc:  # 404 retired model, 403 bad key, network down
+        message = str(exc).split("{", 1)[0].strip() or type(exc).__name__
+        return (f"Gemini model {model!r} is not usable with this key ({message}). "
+                f"Set AGENT_MODEL in .env, for example gemini-3.8-flash.")
+
+
 @dataclass
 class RunResult:
     summary: str = ""

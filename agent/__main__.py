@@ -15,7 +15,7 @@ from agent.config import (BUYERS, DEFAULT_MODEL, Settings, load_gemini_key, load
                           secret_values)
 from agent.events import EventSink
 from agent.mcp_link import TradeServerUnreachable
-from agent.runner import run_buyer
+from agent.runner import check_model, run_buyer
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -47,6 +47,10 @@ def main(argv: list[str] | None = None) -> int:
         model=args.model or os.environ.get("AGENT_MODEL", DEFAULT_MODEL),
         mandate_token=token, mandate_source=source, approval_wait_s=args.wait,
         gullible=args.gullible, replies=args.reply)
+    problem = check_model(settings.model)
+    if problem:
+        print(problem, file=sys.stderr)
+        return 2
     print(f"Mandate: {source}", file=sys.stderr)
     sink = EventSink(settings.web_url, secrets=secret_values(), buyer=settings.buyer)
     try:

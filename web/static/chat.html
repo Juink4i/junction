@@ -109,7 +109,7 @@
       }
       if (tool === "place_order") return { text: `${r.status}` };
       if (tool === "get_approval_status") return { text: `${r.status}${r.decided_by ? " by " + r.decided_by : ""}` };
-      if (tool === "get_audit_log") return { text: `${(r.entries ?? []).length} log entries` };
+      if (tool === "get_audit_log") return { text: `${(Array.isArray(r) ? r : (r.entries ?? [])).length} log entries` };
       return { text: short(r) };
     }
 

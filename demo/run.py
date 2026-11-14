@@ -30,7 +30,7 @@ from agent.config import (DEFAULT_MODEL, Settings, load_gemini_key, load_mandate
                           quiet_logs, secret_values)
 from agent.events import EventSink  # noqa: E402
 from agent.mcp_link import TradeServerUnreachable  # noqa: E402
-from agent.runner import make_ask, run_buyer  # noqa: E402
+from agent.runner import check_model, make_ask, run_buyer  # noqa: E402
 from agent.scripted import PlannedLlm, shopping_plan  # noqa: E402
 from demo.scenes import OVERRIDES_DIR, Scene, build_scenes  # noqa: E402
 from demo.servers import port_open, run_in_thread  # noqa: E402
@@ -134,6 +134,11 @@ def main(argv=None) -> int:
             print("No Gemini key. Put GEMINI_API_KEY=... in .env, or run with --scripted.", file=sys.stderr)
             return 2
         cfg.model = args.model or os.environ.get("AGENT_MODEL", DEFAULT_MODEL)
+        problem = check_model(cfg.model)
+        if problem:
+            print(problem, file=sys.stderr)
+            return 2
+        print(f"Agent model: {cfg.model}")
 
     trade_port = httpx.URL(cfg.trade_http).port or 80
     if not port_open(trade_port):

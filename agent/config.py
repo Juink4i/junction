@@ -23,7 +23,7 @@ BUYERS = {
     "school": "Espoo School Kitchens",
 }
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 
 @dataclass

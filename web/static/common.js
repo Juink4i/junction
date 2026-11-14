@@ -39,7 +39,11 @@ function md(text) {
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
       .replace(/`([^`]+)`/g, '<code class="mono">$1</code>');
     const bullet = line.match(/^\s*(?:[-*•]|\d+\.)\s+(.*)$/);
-    if (bullet) {
+    const heading = line.match(/^\s*#{1,6}\s+(.*)$/);
+    if (heading) {
+      if (inList) { html += "</ul>"; inList = false; }
+      html += `<p class="md-h">${heading[1]}</p>`;
+    } else if (bullet) {
       if (!inList) { html += "<ul>"; inList = true; }
       html += `<li>${bullet[1]}</li>`;
     } else {
