@@ -7,6 +7,9 @@ The pages are plain HTML and JavaScript in web/static. This server:
 - collects the agent's events (POST /api/events) and streams them to the chat page (SSE),
 - serves per-account views (/api/accounts/...) read-only from state.db, each scoped to one
   buyer so no account sees another's data,
+- lets a buyer edit and re-sign its own mandate (PUT /api/accounts/{id}/mandate; the only
+  writes to state.db, see web/mandate_edit.py),
+- serves the Valio Aimo operations view (/api/admin/...), which sees every account,
 - serves the built React frontend at /app/.
 """
 
@@ -20,7 +23,8 @@ import os
 import sqlite3
 from collections import deque
 from contextlib import asynccontextmanager
-from datetime import date
+import threading
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 
@@ -34,12 +38,13 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from server.db import STATE_DB
-from web import accounts
+from web import accounts, admin, mandate_edit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).parent / "static"
 PAGES = {"/": "stage.html", "/approvals": "approvals.html", "/log": "log.html", "/chat": "chat.html"}
 MANDATE_DIR = REPO_ROOT / "server" / "mandates"
+BUYER_KEYS_DIR = REPO_ROOT / "data" / "buyer_keys"
 FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
 NOT_BUILT = "Frontend not built. Run: cd frontend && npm install && npm run build"
 HEARTBEAT_S = 15
@@ -109,11 +114,14 @@ def _frame(event: dict[str, Any]) -> str:
 
 def create_app(trade_http: str | None = None, state_db: str | Path | None = None,
                mandate_dir: str | Path | None = None, catalog: Any = None,
-               frontend_dist: str | Path | None = None) -> Starlette:
+               frontend_dist: str | Path | None = None,
+               buyer_keys_dir: str | Path | None = None) -> Starlette:
     trade = (trade_http or os.environ.get("TRADE_HTTP_URL", "http://localhost:8000")).rstrip("/")
     hub = EventHub()
     state_path = Path(state_db) if state_db is not None else STATE_DB
     mandates = Path(mandate_dir) if mandate_dir is not None else MANDATE_DIR
+    buyer_keys = Path(buyer_keys_dir) if buyer_keys_dir is not None else BUYER_KEYS_DIR
+    mandate_lock = threading.Lock()  # one mandate edit at a time, so versions never collide
     dist = (Path(frontend_dist) if frontend_dist is not None else FRONTEND_DIST).resolve()
     catalog_box: dict[str, Any] = {"catalog": catalog, "loaded": catalog is not None}
 
@@ -278,6 +286,81 @@ def create_app(trade_http: str | None = None, state_db: str | Path | None = None
             return verdict
         return await forward(request, "POST", f"/approvals/{approval_id}/{action}")
 
+    def mandate_put(request: Request, change: Any) -> Response:
+        """The buyer edits its own mandate. web/ signs it with the buyer's key."""
+        buyer_id = request.path_params["buyer_id"]
+        today = date.today()
+
+        def lookup(conn: sqlite3.Connection) -> Response:
+            account = accounts.get_account(conn, buyer_id, mandates, today)
+            if account is None:
+                return _error("account_not_found", f"No account {buyer_id}.", 404)
+            return JSONResponse(account)
+
+        found = with_db(lookup)
+        if found.status_code != 200:
+            return found
+        name = json.loads(found.body)["name"]
+        try:
+            with mandate_lock:
+                changed = mandate_edit.update_mandate(
+                    buyer_id=buyer_id, buyer_name=name, change=change, mandate_dir=mandates,
+                    keys_dir=buyer_keys, state_db=state_path, today=today)
+        except mandate_edit.EditError as e:
+            return _error(e.code, str(e), 400)
+        except sqlite3.OperationalError:
+            return _error("state_db_unavailable", "The mandate was signed, but the trade server's "
+                          "database is busy. Try again.", 503, retryable=True)
+        return with_db(lookup) if changed else found
+
+    async def account_mandate(request: Request) -> Response:
+        try:
+            change = await request.json()
+        except ValueError:
+            return _error("bad_field", "Send a JSON object with only the fields to change.", 400)
+        return await run_in_threadpool(mandate_put, request, change)
+
+    # Valio Aimo operations: every account. Events are copied on the event loop first.
+
+    def _since_until(request: Request) -> tuple[datetime | None, datetime | None]:
+        times = []
+        for name in ("since", "until"):
+            text = request.query_params.get(name)
+            times.append(admin.parse_time(text) if text else None)
+        return times[0], times[1]
+
+    def bad_date() -> Response:
+        return _error("bad_date", "since and until must be ISO times like 2026-11-14T10:00:00Z.", 400)
+
+    async def admin_clients(_: Request) -> Response:
+        events, now = list(hub.history), datetime.now(timezone.utc)
+        return await run_in_threadpool(with_db, lambda conn: JSONResponse(
+            admin.clients(conn, mandates, date.today(), events, now)))
+
+    def admin_orders(request: Request) -> Response:
+        try:
+            since, until = _since_until(request)
+        except ValueError:
+            return bad_date()
+        return with_db(lambda conn: JSONResponse(admin.all_orders(conn, since, until)))
+
+    def admin_order(request: Request) -> Response:
+        order_id = request.path_params["order_id"]
+
+        def work(conn: sqlite3.Connection) -> Response:
+            order = admin.any_order(conn, order_id, get_catalog())
+            return JSONResponse(order) if order is not None else _error(
+                "order_not_found", "There is no order with that id.", 404)
+
+        return with_db(work)
+
+    def admin_log(request: Request) -> Response:
+        try:
+            since, _ = _since_until(request)
+        except ValueError:
+            return bad_date()
+        return with_db(lambda conn: JSONResponse(admin.full_log(conn, mandates, since)))
+
     # The built React frontend, with an SPA fallback to index.html.
 
     async def app_root(_: Request) -> Response:
@@ -302,6 +385,11 @@ def create_app(trade_http: str | None = None, state_db: str | Path | None = None
         Route("/api/accounts/{buyer_id}/approvals/{approval_id}/{action}", account_decide,
               methods=["POST"]),
         Route("/api/accounts/{buyer_id}/log", account_log),
+        Route("/api/accounts/{buyer_id}/mandate", account_mandate, methods=["PUT"]),
+        Route("/api/admin/clients", admin_clients),
+        Route("/api/admin/orders", admin_orders),
+        Route("/api/admin/orders/{order_id}", admin_order),
+        Route("/api/admin/log", admin_log),
         Route("/app", app_root),
         Route("/app/{path:path}", app_files),
         Route("/api/approvals", approvals),

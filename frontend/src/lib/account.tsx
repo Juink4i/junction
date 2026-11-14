@@ -10,6 +10,7 @@ interface AccountState {
   follow: boolean
   setFollow: (on: boolean) => void
   error: string | null
+  reload: () => void
 }
 
 const Ctx = createContext<AccountState | null>(null)
@@ -32,7 +33,7 @@ function write(key: string, value: string) {
 }
 
 export function AccountProvider({ children }: { children: ReactNode }) {
-  const { data, error } = usePoll<Account[]>('/accounts', 30000)
+  const { data, error, reload } = usePoll<Account[]>('/accounts', 30000)
   const accounts = useMemo(() => data ?? [], [data])
   const fromUrl = new URLSearchParams(window.location.search).get('account')
   const [buyerId, setBuyer] = useState<string | null>(fromUrl ?? read(KEY))
@@ -79,6 +80,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     follow,
     setFollow,
     error: error?.message ?? null,
+    reload,
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

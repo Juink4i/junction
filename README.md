@@ -61,13 +61,16 @@ Tests: `uv run pytest`
 
 ### Frontend (`/app/`)
 
-A React + shadcn/ui app in `frontend/`, served by `web/` at **http://localhost:8080/app/**. Everything is **per account**: pick Hotel, Café or School at the top (or tick *Follow demo*), and every page shows only that account's orders, approvals, log rows and agent events. `web/` enforces this server-side (`/api/accounts/{buyer_id}/...`, read-only from `data/state.db`); mandate tokens never reach the browser.
+A React + shadcn/ui app in `frontend/`, served by `web/` at **http://localhost:8080/app/**, with two views:
 
-| Page | What it shows |
-|---|---|
-| Overview | The live run as a pipeline: AI agent → AI agent → **plain code** → person, the agent feed, the current quote and the phone approvals |
-| Orders & delivery | Every order with its outcome; each opens a **delivery progress** page (green dots joined by a line: quoted → rules checked → approval → placed → delivery date), with delivery reliability and CO₂ from Valio Aimo's data files |
-| Approvals, Audit log, Mandate | Phone approvals with a reject confirmation; the log grouped by order with **Verify log**; the signed rules in plain words |
+**Buyer** (`/app/client`): simple, white, one account at a time (Hotel, Café or School). Every request goes through `/api/accounts/{buyer_id}/...`, which `web/` scopes to that one account, read-only from `data/state.db`, so no account sees another's data.
+- *Overview:* approvals waiting for you (Approve / Reject), what the agent is doing right now, and your orders, each opening a **delivery progress** page (green dots joined by a line: quoted, rules checked, approval, placed, delivery date).
+- *Chat:* the conversation: you on the right, your agent and Valio Aimo on the left.
+- *Mandate:* your agent's rules in plain words, and **Edit**: `web/` signs the new mandate with the buyer's key (`data/buyer_keys/`, git-ignored), registers it, writes `server/mandates/<buyer>.jwt` and logs `mandate:updated` in the hash chain.
+
+**Valio Aimo** (`/app/server`): trade operations across every client.
+- *Dashboard* (time filter, default one month): orders, confirmed value, orders waiting on buyers, connected agents; the order flow (awaiting input, awaiting approval, approved, shipping today, completed, rejected; shipping and completed follow the promised delivery date, as there is no live tracking); orders per day; clients with mandate status; latest decisions; why orders were rejected.
+- *Orders*, *Live agent activity* (every MCP tool call) and the full *Audit log* per agent, with **Verify log**.
 
 ```
 cd frontend

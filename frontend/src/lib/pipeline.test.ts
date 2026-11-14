@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { orderSteps, runView } from './pipeline'
+import { orderPhase, orderSteps, runView } from './pipeline'
+
+describe('orderPhase', () => {
+  const today = new Date(2026, 10, 16, 12) // 16 Nov 2026, local time
+  it('maps outcomes and delivery dates to phases', () => {
+    expect(orderPhase({ status: 'needs_clarification', delivery_date: null }, today)).toBe('awaiting_input')
+    expect(orderPhase({ status: 'pending_approval', delivery_date: '2026-11-16' }, today)).toBe('awaiting_approval')
+    expect(orderPhase({ status: 'rejected', delivery_date: '2026-11-10' }, today)).toBe('rejected')
+    expect(orderPhase({ status: 'confirmed', delivery_date: '2026-11-17' }, today)).toBe('approved')
+    expect(orderPhase({ status: 'confirmed', delivery_date: '2026-11-16' }, today)).toBe('shipping')
+    expect(orderPhase({ status: 'confirmed', delivery_date: '2026-11-15' }, today)).toBe('completed')
+  })
+})
 import type { AgentEvent, Order } from './types'
 
 let id = 0

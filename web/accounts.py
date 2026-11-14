@@ -38,25 +38,47 @@ def buyer_exists(conn: sqlite3.Connection, buyer_id: str) -> bool:
     return conn.execute("SELECT 1 FROM buyers WHERE buyer_id = ?", (buyer_id,)).fetchone() is not None
 
 
-def list_accounts(conn: sqlite3.Connection, mandate_dir: Path, today: date) -> list[dict]:
+def buyer_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every buyer, in demo order: hotel, cafe, school, then the rest by id."""
     rows = conn.execute("SELECT buyer_id, name FROM buyers").fetchall()
     rank = {b: i for i, b in enumerate(ACCOUNT_ORDER)}
     rows.sort(key=lambda r: (rank.get(r["buyer_id"], len(rank)), r["buyer_id"]))
-    return [_account(conn, row, Path(mandate_dir), today) for row in rows]
+    return rows
+
+
+def list_accounts(conn: sqlite3.Connection, mandate_dir: Path, today: date) -> list[dict]:
+    return [_account(conn, row, Path(mandate_dir), today) for row in buyer_rows(conn)]
+
+
+def get_account(conn: sqlite3.Connection, buyer_id: str, mandate_dir: Path, today: date) -> dict | None:
+    row = conn.execute("SELECT buyer_id, name FROM buyers WHERE buyer_id = ?", (buyer_id,)).fetchone()
+    return _account(conn, row, Path(mandate_dir), today) if row else None
+
+
+def read_token(mandate_dir: Path, buyer_id: str) -> str | None:
+    """The buyer's mandate token from disk. Only for checking and signing; never returned."""
+    try:
+        return (Path(mandate_dir) / f"{buyer_id}.jwt").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def decode_unverified(token: str) -> dict | None:
+    try:
+        return jwt.decode(token, options={"verify_signature": False})
+    except jwt.InvalidTokenError:
+        return None
 
 
 def _account(conn: sqlite3.Connection, row: sqlite3.Row, mandate_dir: Path, today: date) -> dict:
     account = {"buyer_id": row["buyer_id"], "name": row["name"], "mandate": None,
                "mandate_verified": False, "mandate_problem": None}
-    path = mandate_dir / f"{row['buyer_id']}.jwt"
-    try:
-        token = path.read_text(encoding="utf-8").strip()
-    except OSError:
+    token = read_token(mandate_dir, row["buyer_id"])
+    if token is None:
         account["mandate_problem"] = "No mandate file for this buyer."
         return account
-    try:
-        account["mandate"] = jwt.decode(token, options={"verify_signature": False})
-    except jwt.InvalidTokenError:
+    account["mandate"] = decode_unverified(token)
+    if account["mandate"] is None:
         account["mandate_problem"] = "The mandate is not a readable signed token."
         return account
     try:
@@ -73,11 +95,14 @@ def _account(conn: sqlite3.Connection, row: sqlite3.Row, mandate_dir: Path, toda
 
 # Orders
 
-_ORDER_SQL = (
-    "SELECT o.*, q.body_json, a.approval_id AS a_id, a.status AS a_status, a.approvers_json, "
-    "a.decided_by, a.decided_at FROM orders o LEFT JOIN quotes q ON q.quote_id = o.quote_id "
-    "LEFT JOIN approvals a ON a.order_id = o.order_id WHERE o.buyer_id = ?"
+_ORDER_SELECT = (
+    "SELECT o.*, b.name AS buyer_name, q.body_json, a.approval_id AS a_id, a.status AS a_status, "
+    "a.approvers_json, a.decided_by, a.decided_at FROM orders o "
+    "LEFT JOIN buyers b ON b.buyer_id = o.buyer_id LEFT JOIN quotes q ON q.quote_id = o.quote_id "
+    "LEFT JOIN approvals a ON a.order_id = o.order_id"
 )
+_ORDER_SQL = _ORDER_SELECT + " WHERE o.buyer_id = ?"
+NEWEST_FIRST = " ORDER BY o.created_at DESC, o.rowid DESC"
 
 
 def _order(row: sqlite3.Row) -> dict:
@@ -107,7 +132,7 @@ def _order(row: sqlite3.Row) -> dict:
 
 
 def list_orders(conn: sqlite3.Connection, buyer_id: str) -> list[dict]:
-    rows = conn.execute(_ORDER_SQL + " ORDER BY o.created_at DESC, o.rowid DESC", (buyer_id,))
+    rows = conn.execute(_ORDER_SQL + NEWEST_FIRST, (buyer_id,))
     return [_order(row) for row in rows]
 
 
@@ -116,8 +141,11 @@ def get_order(conn: sqlite3.Connection, buyer_id: str, order_id: str, catalog: A
 
     Another buyer's order gives None too, so its existence is never revealed."""
     row = conn.execute(_ORDER_SQL + " AND o.order_id = ?", (buyer_id, order_id)).fetchone()
-    if row is None:
-        return None
+    return None if row is None else order_detail(conn, row, catalog)
+
+
+def order_detail(conn: sqlite3.Connection, row: sqlite3.Row, catalog: Any) -> dict:
+    """An order row (from _ORDER_SELECT) with its log rows and each line's product details."""
     order = _order(row)
     order["lines"] = [{**line, "product": product_details(catalog, line.get("product_id"))}
                       for line in order["lines"]]

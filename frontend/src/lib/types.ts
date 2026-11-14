@@ -14,6 +14,7 @@ export interface Mandate {
   buyer: string
   agent_id: string
   valid_until: string
+  issued_at?: string
   auto_approve: { max_order_eur?: number; max_line_eur?: number; allowed_categories?: string[] }
   substitution: { allowed: boolean; must_keep: string[]; max_price_increase_pct: number }
   hard_rules: { blocked_allergens: string[]; unknown_allergens: string; no_delivery_after?: string }
@@ -100,6 +101,38 @@ export interface PendingApproval {
   total_eur: number
   total_with_tax_eur: number
   created_at: string
+}
+
+/** Valio Aimo operations view: one row per connected buyer. */
+export interface AdminClient {
+  buyer_id: string
+  name: string
+  agent_id: string | null
+  mandate_id: string | null
+  valid_until: string | null
+  mandate_verified: boolean
+  mandate_problem: string | null
+  last_seen: string | null
+  agent_running: boolean
+  orders_total: number
+}
+
+export interface AdminOrder extends Order {
+  buyer_id: string
+  buyer_name: string
+}
+
+export interface AdminLogEntry extends LogEntry {
+  buyer_id: string | null
+}
+
+/** The fields a buyer may change in its own mandate (PUT /accounts/{id}/mandate). */
+export interface MandateChanges {
+  auto_approve?: { max_order_eur?: number; max_line_eur?: number; allowed_categories?: string[] | null }
+  substitution?: { allowed?: boolean; must_keep?: string[]; max_price_increase_pct?: number }
+  hard_rules?: { blocked_allergens?: string[]; unknown_allergens?: string }
+  approvers?: string[]
+  valid_until?: string
 }
 
 export interface VerifyResult {

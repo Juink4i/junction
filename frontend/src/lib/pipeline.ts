@@ -294,6 +294,34 @@ export function orderSteps(order: Order, today: Date = new Date()): Step[] {
   return steps
 }
 
+// ---------------------------------------------------------------------------
+// Where an order is in its life, for the operations dashboard. "Shipping" and
+// "completed" follow Valio Aimo's promised delivery date: there is no live tracking.
+
+export type Phase = 'awaiting_input' | 'awaiting_approval' | 'approved' | 'shipping' | 'completed' | 'rejected'
+
+export const PHASES: { key: Phase; label: string; hint: string }[] = [
+  { key: 'awaiting_input', label: 'Awaiting buyer input', hint: 'The server asked the buyer to confirm an unusual amount.' },
+  { key: 'awaiting_approval', label: 'Awaiting approval', hint: 'Outside the mandate: a person at the buyer must approve.' },
+  { key: 'approved', label: 'Approved', hint: 'Confirmed; delivery date still ahead.' },
+  { key: 'shipping', label: 'Shipping today', hint: 'Confirmed; the promised delivery date is today.' },
+  { key: 'completed', label: 'Completed', hint: 'Confirmed; the promised delivery date has passed.' },
+  { key: 'rejected', label: 'Rejected', hint: 'A hard rule was broken or a person said no.' },
+]
+
+function localDay(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+export function orderPhase(order: Pick<Order, 'status' | 'delivery_date'>, today: Date = new Date()): Phase {
+  if (order.status === 'needs_clarification') return 'awaiting_input'
+  if (order.status === 'pending_approval') return 'awaiting_approval'
+  if (order.status === 'rejected') return 'rejected'
+  const day = localDay(today)
+  if (!order.delivery_date || order.delivery_date > day) return 'approved'
+  return order.delivery_date === day ? 'shipping' : 'completed'
+}
+
 export function progressFraction(steps: Step[]): number {
   const counted = steps.filter((s) => s.state !== 'skipped')
   if (counted.length === 0) return 0

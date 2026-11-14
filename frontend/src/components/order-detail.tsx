@@ -1,14 +1,13 @@
 import { ArrowLeft, CheckCircle2, CircleHelp, Clock, Hourglass, Leaf, OctagonX, Quote, Truck } from 'lucide-react'
 import { useMemo } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link } from 'react-router'
 import { AllergenChips, ErrorNote, LineTags, TagChips } from '@/components/common'
 import { LogTimeline } from '@/components/log-timeline'
 import { StepDetails, Stepper } from '@/components/stepper'
 import { StatusBadge } from '@/components/status'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useAccount } from '@/lib/account'
-import { accountPath, usePoll } from '@/lib/api'
+import { usePoll } from '@/lib/api'
 import { eur, num, pct, shortDate, shortId, unitsBothWays } from '@/lib/format'
 import { orderSteps, type Step } from '@/lib/pipeline'
 import type { Order } from '@/lib/types'
@@ -34,11 +33,18 @@ const TONE = {
   stop: 'border-stop/30 bg-stop-soft text-stop',
 }
 
-export default function OrderDetailPage() {
-  const { orderId = '' } = useParams()
-  const { buyerId } = useAccount()
-  const { data: o, error, loading, reload } = usePoll<Order>(buyerId ? accountPath(buyerId, `/orders/${orderId}`) : null, 4000)
+/**
+ * One order's delivery progress. `apiPath` is the account-scoped URL in the client view
+ * or the admin URL in the operations view; `withTrail` adds the hash-chained log rows.
+ */
+export function OrderDetail({ apiPath, backTo, backLabel, withTrail }: { apiPath: string | null; backTo: string; backLabel: string; withTrail?: boolean }) {
+  const { data: o, error, loading, reload } = usePoll<Order & { buyer_name?: string }>(apiPath, 4000)
   const steps = useMemo(() => (o ? orderSteps(o) : []), [o])
+  const BackLink = () => (
+    <Link to={backTo} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+      <ArrowLeft className="size-4" /> {backLabel}
+    </Link>
+  )
 
   if (loading && !o) return <Skeleton className="h-96 w-full rounded-lg" />
   if (!o)
@@ -67,7 +73,10 @@ export default function OrderDetailPage() {
         </span>
         <div className="min-w-0">
           <div className="text-base font-semibold sm:text-lg">{h.banner}</div>
-          <div className="text-sm text-foreground/75">{h.sub}</div>
+          <div className="text-sm text-foreground/75">
+            {o.buyer_name ? <span className="font-medium">{o.buyer_name} · </span> : null}
+            {h.sub}
+          </div>
         </div>
         <span className="ml-auto hidden font-mono text-xs text-foreground/60 sm:block">{shortId(o.order_id)}</span>
       </div>
@@ -183,22 +192,16 @@ export default function OrderDetailPage() {
         </div>
       </div>
 
-      <Card className="gap-0 p-0">
-        <CardHeader className="border-b py-3!">
-          <CardTitle className="text-base">Decision trail for this order</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <LogTimeline entries={o.log ?? []} />
-        </CardContent>
-      </Card>
+      {withTrail && (
+        <Card className="gap-0 p-0">
+          <CardHeader className="border-b py-3!">
+            <CardTitle className="text-base">Decision trail for this order</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <LogTimeline entries={o.log ?? []} />
+          </CardContent>
+        </Card>
+      )}
     </div>
-  )
-}
-
-function BackLink() {
-  return (
-    <Link to="/orders" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-      <ArrowLeft className="size-4" /> Orders
-    </Link>
   )
 }

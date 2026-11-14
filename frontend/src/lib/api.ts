@@ -85,7 +85,11 @@ export function usePoll<T>(path: string | null, everyMs?: number): Loaded<T> {
   return { data, error, loading, reload }
 }
 
-/** Live agent events for one account (server-side filtered by ?buyer=). */
+/**
+ * Live agent events. A buyer id gives that one account's events (filtered server-side by
+ * ?buyer=); ALL_ACCOUNTS gives every account's, for the Valio Aimo operations view.
+ */
+export const ALL_ACCOUNTS = '*'
 export function useEvents(buyer: string | null): { events: AgentEvent[]; live: boolean } {
   const [events, setEvents] = useState<AgentEvent[]>([])
   const [live, setLive] = useState(false)
@@ -93,7 +97,8 @@ export function useEvents(buyer: string | null): { events: AgentEvent[]; live: b
   useEffect(() => {
     setEvents([])
     if (!buyer) return
-    const src = new EventSource(`/api/events/stream?buyer=${encodeURIComponent(buyer)}`)
+    const query = buyer === ALL_ACCOUNTS ? '' : `?buyer=${encodeURIComponent(buyer)}`
+    const src = new EventSource(`/api/events/stream${query}`)
     src.onopen = () => setLive(true)
     src.onerror = () => setLive(false)
     src.onmessage = (msg) => {
