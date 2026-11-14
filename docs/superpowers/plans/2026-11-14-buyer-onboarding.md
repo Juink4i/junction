@@ -606,6 +606,7 @@ Create `server/tests/test_register.py`:
 
 from datetime import datetime, timedelta, timezone
 
+import jwt
 import pytest
 from starlette.testclient import TestClient
 
@@ -654,7 +655,11 @@ def svc(clock):
 def signed(mandate=MANDATE, kid="aurinko-3f2a", key=None):
     """(public_pem, mandate_token), signed by a fresh key unless one is given."""
     key = key or signing.generate_key()
-    return signing.public_pem(key.public_key()), signing.sign(mandate, key, kid=kid)
+    if kid is None:  # a token with no buyer id at all; PyJWT will not sign kid=None
+        token = jwt.encode(mandate, key, algorithm=signing.ALGORITHM)
+    else:
+        token = signing.sign(mandate, key, kid=kid)
+    return signing.public_pem(key.public_key()), token
 
 
 def milk(svc, litres, need_by="2026-11-16"):

@@ -10,9 +10,11 @@ import threading
 from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
+import jwt
+
 from server import audit, signing
 from server.db import transaction
-from server.mandate import MandateError, verify_mandate
+from server.mandate import BUYER_ID, MandateError, check_mandate, verify_mandate
 from server.policy import decide, eur
 from server.unusual import MODEL, REASON_PREFIX, THRESHOLD, flag_reason
 
@@ -64,6 +66,53 @@ class Service:
     def _log(self, actor: str, action: str, reason: str, order_id: str | None = None,
              quote_id: str | None = None) -> None:
         audit.append(self.conn, self.now(), actor, action, reason, order_id, quote_id)
+
+    # Buyers
+
+    @locked
+    def register_buyer(self, public_pem: Any, mandate_token: Any) -> tuple[int, dict]:
+        """A kitchen registers its signing key and its signed mandate. Returns (HTTP status, body).
+
+        Plain HTTP only, never an MCP tool: an agent must not be able to register a mandate.
+        """
+        if not (isinstance(public_pem, str) and public_pem
+                and isinstance(mandate_token, str) and mandate_token):
+            return 400, error("bad_request", "Send public_pem and mandate_token as text.")
+        try:
+            buyer_id = jwt.get_unverified_header(mandate_token).get("kid")
+        except jwt.InvalidTokenError:
+            buyer_id = None
+        if not (isinstance(buyer_id, str) and BUYER_ID.fullmatch(buyer_id)):
+            return 400, error("mandate_invalid", "The mandate token must carry a buyer id of 3 to 64 "
+                              "lowercase letters, digits or hyphens.")
+        if self.conn.execute("SELECT 1 FROM buyers WHERE buyer_id = ?", (buyer_id,)).fetchone():
+            self._log("unknown", "register_buyer:refused",
+                      f"Someone tried to register buyer id {buyer_id}, which is already registered.")
+            return 409, error("buyer_exists", f"A buyer with id {buyer_id} is already registered.")
+        if not signing.is_ed25519_public(public_pem):
+            return 400, error("bad_key", "public_pem is not an Ed25519 public key.")
+        now = self.now()
+        try:
+            mandate = check_mandate(mandate_token, signing.load_public(public_pem), now.date())
+        except MandateError as e:
+            return 400, error("mandate_invalid", str(e))
+
+        usual = mandate.get("usual_orders", [])
+        with transaction(self.conn):
+            self.conn.execute("INSERT INTO buyers (buyer_id, name, public_pem) VALUES (?, ?, ?)",
+                              (buyer_id, mandate["buyer"], public_pem))
+            self.conn.executemany(
+                "INSERT INTO order_history (buyer_id, category, amount, content_unit, ordered_on) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [(buyer_id, o["category"], o["amount"], o["content_unit"], now.date().isoformat())
+                 for o in usual])
+        declared = "; ".join(f"{o['amount']:g} {o['content_unit']} of category {o['category']} "
+                             f"each {o['every']}" for o in usual)
+        self._log(mandate["buyer"], "register_buyer",
+                  f"{mandate['buyer']} registered its signing key and mandate "
+                  f"{mandate['mandate_id']} as buyer {buyer_id}. "
+                  + (f"Declared usual orders: {declared}." if declared else "No usual orders declared."))
+        return 201, {"buyer_id": buyer_id, "mandate_id": mandate["mandate_id"], "status": "registered"}
 
     # Search and details: static data only.
 

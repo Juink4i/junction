@@ -34,6 +34,14 @@ def load_public(pem: str) -> Ed25519PublicKey:
     return serialization.load_pem_public_key(pem.encode())
 
 
+def is_ed25519_public(pem) -> bool:
+    """True if pem is text that holds an Ed25519 public key."""
+    try:
+        return isinstance(pem, str) and isinstance(load_public(pem), Ed25519PublicKey)
+    except Exception:
+        return False
+
+
 def server_key(conn: sqlite3.Connection) -> Ed25519PrivateKey:
     row = conn.execute("SELECT private_pem FROM keys WHERE name = 'server'").fetchone()
     if row:

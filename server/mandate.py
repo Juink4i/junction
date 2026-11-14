@@ -1,6 +1,7 @@
 """The buyer's signed mandate: what their agent may do alone."""
 
 import math
+import re
 import sqlite3
 from datetime import date
 
@@ -9,6 +10,8 @@ import jwt
 from server import signing
 
 UNKNOWN_ALLERGEN_RULES = ("human", "reject", "allow")
+PERIODS = ("week", "month")
+BUYER_ID = re.compile(r"[a-z0-9-]{3,64}")
 
 
 class MandateError(Exception):
@@ -26,6 +29,12 @@ def _texts(value) -> bool:
 def _amount(value) -> bool:
     return (isinstance(value, (int, float)) and not isinstance(value, bool)
             and math.isfinite(value) and value >= 0)
+
+
+def _usual_order(value) -> bool:
+    return (isinstance(value, dict) and _text(value.get("category"))
+            and _amount(value.get("amount")) and value["amount"] > 0
+            and value.get("content_unit") in ("L", "KG") and value.get("every") in PERIODS)
 
 
 def _shape_problems(mandate: dict) -> list[str]:
@@ -60,20 +69,25 @@ def _shape_problems(mandate: dict) -> list[str]:
             problems.append("substitution.must_keep must be a list of tags")
     if "approvers" in mandate and not _texts(mandate["approvers"]):
         problems.append("approvers must be a list of names or addresses")
+
+    if "budget" in mandate:
+        budget = mandate["budget"]
+        if not (isinstance(budget, dict) and budget.get("period") in PERIODS
+                and _amount(budget.get("max_eur")) and budget["max_eur"] > 0):
+            problems.append("budget must have a period of week or month, and max_eur as a "
+                            "number of euros above zero")
+    if "usual_orders" in mandate:
+        usual = mandate["usual_orders"]
+        if not (isinstance(usual, list) and all(_usual_order(o) for o in usual)):
+            problems.append("usual_orders must be a list of orders, each with a category, an amount "
+                            "above zero, a content_unit of L or KG, and every as week or month")
     return problems
 
 
-def verify_mandate(token: str, conn: sqlite3.Connection, today: date) -> tuple[str, dict]:
-    """Returns (buyer_id, mandate), or raises MandateError with a plain reason."""
+def check_mandate(token: str, public_key, today: date) -> dict:
+    """The mandate inside a token signed by this key, or MandateError with a plain reason."""
     try:
-        buyer_id = jwt.get_unverified_header(token).get("kid")
-    except jwt.InvalidTokenError:
-        raise MandateError("The mandate is not a readable signed token.")
-    row = conn.execute("SELECT public_pem FROM buyers WHERE buyer_id = ?", (buyer_id,)).fetchone()
-    if row is None:
-        raise MandateError("The mandate's signing key is not registered with Valio Aimo.")
-    try:
-        mandate = signing.verify(token, signing.load_public(row["public_pem"]))
+        mandate = signing.verify(token, public_key)
     except jwt.InvalidTokenError:
         raise MandateError("The mandate's signature is not valid. It was not signed by the buyer, "
                            "or it was changed after signing.")
@@ -86,4 +100,16 @@ def verify_mandate(token: str, conn: sqlite3.Connection, today: date) -> tuple[s
         raise MandateError("The mandate's valid_until date is missing or not readable.")
     if today > valid_until:
         raise MandateError(f"The mandate expired on {valid_until.isoformat()}.")
-    return buyer_id, mandate
+    return mandate
+
+
+def verify_mandate(token: str, conn: sqlite3.Connection, today: date) -> tuple[str, dict]:
+    """Returns (buyer_id, mandate), or raises MandateError with a plain reason."""
+    try:
+        buyer_id = jwt.get_unverified_header(token).get("kid")
+    except jwt.InvalidTokenError:
+        raise MandateError("The mandate is not a readable signed token.")
+    row = conn.execute("SELECT public_pem FROM buyers WHERE buyer_id = ?", (buyer_id,)).fetchone()
+    if row is None:
+        raise MandateError("The mandate's signing key is not registered with Valio Aimo.")
+    return buyer_id, check_mandate(token, signing.load_public(row["public_pem"]), today)

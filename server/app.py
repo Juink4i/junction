@@ -119,6 +119,19 @@ def get_audit_log(ctx: Context, order_id: str | None = None,
     return service().get_audit_log(order_id, quote_id, actor=_actor(ctx))
 
 
+@mcp.custom_route("/buyers", methods=["POST"])
+async def register_buyer(request: Request) -> JSONResponse:
+    """A kitchen registers its public key and signed mandate. Not an MCP tool, on purpose."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        body = {}
+    status, result = service().register_buyer(body.get("public_pem"), body.get("mandate_token"))
+    return JSONResponse(result, status_code=status)
+
+
 @mcp.custom_route("/approvals", methods=["GET"])
 async def list_approvals(request: Request) -> JSONResponse:
     return JSONResponse(service().list_approvals())
