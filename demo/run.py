@@ -1,9 +1,10 @@
-"""Play the demo: five scenes in order. The only manual step is tapping Approve/Reject.
+"""Play the demo: six scenes in order. The only manual steps are signing the new kitchen up
+(the demo does it itself if nobody does) and tapping Approve/Reject.
 
     uv run python demo/run.py                 # real server on :8000, Gemini agent
     uv run python demo/run.py --fake          # start the fake server if nothing is on :8000
     uv run python demo/run.py --scripted      # no Gemini: a fixed plan drives the same tools
-    uv run python demo/run.py --only a,e      # some scenes only
+    uv run python demo/run.py --only o,e      # some scenes only
 
 It starts the web pages on :8080 if they aren't running, and opens the stage view.
 """
@@ -15,6 +16,7 @@ import asyncio
 import json
 import shutil
 import sys
+import time
 import webbrowser
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -34,6 +36,9 @@ from agent.runner import check_model, make_ask, run_buyer  # noqa: E402
 from agent.scripted import PlannedLlm, shopping_plan  # noqa: E402
 from demo.scenes import OVERRIDES_DIR, Scene, build_scenes  # noqa: E402
 from demo.servers import port_open, run_in_thread  # noqa: E402
+from onboarding.build import new_buyer_id  # noqa: E402
+from onboarding.enroll import BUYERS_DIR, EnrollError, enroll  # noqa: E402
+from onboarding.options import template  # noqa: E402
 
 OVERRIDES_FILE = ROOT / "data" / "overrides.json"
 
@@ -47,6 +52,7 @@ class DemoConfig:
     pause_s: float = 4.0
     wait_scale: float = 1.0
     overrides_file: Path = OVERRIDES_FILE
+    buyers_dir: Path = BUYERS_DIR
 
     @property
     def mcp_url(self) -> str:
@@ -71,9 +77,55 @@ def scene_overrides(name: str | None, target: Path):
             target.write_bytes(backup)
 
 
+async def _signed_up_on_the_page(cfg: DemoConfig, timeout_s: float) -> str | None:
+    """The buyer id of a kitchen signed up on the web page after this call began, or None."""
+    async with httpx.AsyncClient(timeout=3) as http:
+        async def events() -> list[dict] | None:
+            try:
+                found = (await http.get(f"{cfg.web_url}/api/events")).json()
+            except (httpx.HTTPError, ValueError):
+                return None
+            return found if isinstance(found, list) else None
+
+        before = await events()
+        if before is None:  # the web pages are not running, so nobody can sign up there
+            return None
+        seen = max((e.get("id", 0) for e in before), default=0)
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            await asyncio.sleep(1.0)
+            for e in await events() or []:
+                if e.get("kind") == "onboarded" and e.get("id", 0) > seen and e.get("buyer"):
+                    return e["buyer"]
+    return None
+
+
+async def sign_up(scene: Scene, cfg: DemoConfig, sink: EventSink) -> str:
+    """Sign a new kitchen up and return its buyer id.
+
+    Live, the presenter does it on the page. If nobody does in time, or in scripted mode, the
+    runner submits the scene's kitchen template itself, so the demo never stalls.
+    """
+    if not cfg.scripted:
+        buyer = await _signed_up_on_the_page(cfg, scene.wait_s * cfg.wait_scale)
+        if buyer:
+            sink.buyer = buyer
+            return buyer
+        sink.publish("note", text="Nobody signed up on the page in time, so the demo fills in the "
+                                  "kitchen's answers itself.")
+    answers = template(scene.onboard)
+    buyer = new_buyer_id(answers["kitchen"]["name"])
+    built = await asyncio.to_thread(enroll, answers, buyer, None, cfg.trade_http,
+                                    buyers_dir=cfg.buyers_dir)
+    sink.buyer = buyer
+    sink.publish("onboarded", buyer_name=built.profile["name"], sentences=built.sentences)
+    return buyer
+
+
 async def play_scene(scene: Scene, cfg: DemoConfig, sink: EventSink) -> str:
-    sink.buyer = scene.buyer
-    sink.publish("scene", title=scene.title, subtitle=scene.subtitle, key=scene.key)
+    sink.buyer = scene.buyer or None
+    sink.publish("scene", title=scene.title, subtitle=scene.subtitle, key=scene.key,
+                 onboard=scene.onboard)
     if scene.hint and sink.console:  # for the presenter's terminal only, not the screen
         print(f"   👉 {scene.hint}", flush=True)
 
@@ -85,13 +137,23 @@ async def play_scene(scene: Scene, cfg: DemoConfig, sink: EventSink) -> str:
         sink.publish("verify", ok=verdict.get("ok"), broken_at_seq=verdict.get("broken_at_seq"), count=count)
         return "intact" if verdict.get("ok") else f"broken at {verdict.get('broken_at_seq')}"
 
-    token, _ = load_mandate(scene.buyer)
+    buyer, profile = scene.buyer, None
+    if scene.onboard:
+        try:
+            buyer = await sign_up(scene, cfg, sink)
+            folder = cfg.buyers_dir / buyer
+            token = (folder / "mandate.jwt").read_text().strip()
+            profile = json.loads((folder / "profile.json").read_text())
+        except (EnrollError, OSError, ValueError) as exc:
+            return f"error: the kitchen could not be signed up ({exc})"
+    else:
+        token, _ = load_mandate(scene.buyer)
 
     async def attempt(scripted: bool):
         model = PlannedLlm(shopping_plan(scene.plan, gullible=scene.gullible)) if scripted else cfg.model
-        settings = Settings(buyer=scene.buyer, server_url=cfg.mcp_url, web_url=None, model=model,
+        settings = Settings(buyer=buyer, server_url=cfg.mcp_url, web_url=None, model=model,
                             mandate_token=token, approval_wait_s=scene.wait_s * cfg.wait_scale,
-                            gullible=scene.gullible, replies=list(scene.replies))
+                            gullible=scene.gullible, replies=list(scene.replies), profile=profile)
         return await run_buyer(scene.request, settings, sink, make_ask(scene.replies, interactive=False))
 
     with scene_overrides(scene.overrides, cfg.overrides_file):
