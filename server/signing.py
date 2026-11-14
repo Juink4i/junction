@@ -34,6 +34,14 @@ def load_public(pem: str) -> Ed25519PublicKey:
     return serialization.load_pem_public_key(pem.encode())
 
 
+def is_ed25519_public(pem) -> bool:
+    """True if pem is text that holds an Ed25519 public key."""
+    try:
+        return isinstance(pem, str) and isinstance(load_public(pem), Ed25519PublicKey)
+    except Exception:
+        return False
+
+
 def server_key(conn: sqlite3.Connection) -> Ed25519PrivateKey:
     row = conn.execute("SELECT private_pem FROM keys WHERE name = 'server'").fetchone()
     if row:
@@ -69,3 +77,19 @@ def check_quote(quote: dict, key: Ed25519PublicKey, now: datetime) -> date:
     if now > datetime.fromisoformat(body["expires_at"]):
         raise QuoteError("The quote has expired. Quotes are valid for 15 minutes. Request a new one.")
     return date.fromisoformat(need_by)
+
+
+UNSIGNED_ORDER = ("This mandate names an agent key, and the order was not signed by it. "
+                  "A copy of the mandate alone cannot place orders.")
+
+
+def order_signature_problem(signature, mandate: dict, quote_id: str, confirm_unusual: bool) -> str | None:
+    """None if the agent key named in the mandate signed exactly this order, else a plain reason."""
+    expected = {"quote_id": quote_id, "mandate_id": mandate["mandate_id"],
+                "confirm_unusual": bool(confirm_unusual)}
+    try:
+        signed = verify(signature if isinstance(signature, str) else "",
+                        load_public(mandate["agent_key"]))
+    except (jwt.InvalidTokenError, ValueError, TypeError):
+        return UNSIGNED_ORDER
+    return None if signed == expected else UNSIGNED_ORDER

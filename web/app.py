@@ -14,18 +14,26 @@ import json
 import os
 from collections import deque
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 from typing import Any, AsyncIterator
 
 import httpx
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from agent.identity import ensure_agent_key
+from onboarding.build import build, new_buyer_id, problems
+from onboarding.enroll import BUYERS_DIR, EnrollError, enroll
+from onboarding.options import options as onboarding_options
+
 STATIC = Path(__file__).parent / "static"
-PAGES = {"/": "stage.html", "/approvals": "approvals.html", "/log": "log.html", "/chat": "chat.html"}
+PAGES = {"/": "stage.html", "/approvals": "approvals.html", "/log": "log.html", "/chat": "chat.html",
+         "/onboarding": "onboarding.html"}
 HEARTBEAT_S = 15
 
 
@@ -59,8 +67,9 @@ def _frame(event: dict[str, Any]) -> str:
     return f"id: {event['id']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
-def create_app(trade_http: str | None = None) -> Starlette:
+def create_app(trade_http: str | None = None, buyers_dir: Path | None = None) -> Starlette:
     trade = (trade_http or os.environ.get("TRADE_HTTP_URL", "http://localhost:8000")).rstrip("/")
+    buyers = buyers_dir or BUYERS_DIR
     hub = EventHub()
 
     @asynccontextmanager
@@ -145,6 +154,53 @@ def create_app(trade_http: str | None = None) -> Starlette:
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
+    async def read_answers(request: Request) -> dict | None:
+        try:
+            answers = await request.json()
+        except ValueError:
+            return None
+        return answers if isinstance(answers, dict) else None
+
+    def bad_answers(message: str) -> JSONResponse:
+        return JSONResponse({"code": "bad_answers", "message": message, "retryable": False}, 400)
+
+    async def onboarding_opts(_: Request) -> JSONResponse:
+        return JSONResponse(onboarding_options())
+
+    async def onboarding_preview(request: Request) -> JSONResponse:
+        answers = await read_answers(request)
+        if answers is None:
+            return bad_answers("Send the answers as a JSON object.")
+        found = problems(answers)
+        sentences = [] if found else build(answers, "preview", date.today(),
+                                           agent_public_pem="preview").sentences
+        return JSONResponse({"problems": found, "sentences": sentences})
+
+    async def onboarding_submit(request: Request) -> JSONResponse:
+        answers = await read_answers(request)
+        if answers is None:
+            return bad_answers("Send the answers as a JSON object.")
+        found = problems(answers)
+        if found:
+            return bad_answers(" ".join(found))
+        buyer_id = new_buyer_id(answers["kitchen"]["name"])
+        try:
+            agent_pem = await run_in_threadpool(ensure_agent_key, buyer_id, buyers)
+            built = await run_in_threadpool(enroll, answers, buyer_id, agent_pem, trade,
+                                            buyers_dir=buyers)
+        except EnrollError as exc:
+            status = {"server_unreachable": 502, "buyer_exists": 409}.get(exc.code, 400)
+            return JSONResponse({"code": exc.code, "message": exc.message,
+                                 "retryable": exc.retryable}, status)
+        except OSError as exc:
+            return JSONResponse({"code": "save_failed", "retryable": False,
+                                 "message": "The kitchen's files could not be saved "
+                                            f"({type(exc).__name__}). Sign up again."}, 500)
+        name = built.profile["name"]
+        hub.publish({"kind": "onboarded", "buyer": buyer_id, "buyer_name": name,
+                     "sentences": built.sentences})
+        return JSONResponse({"buyer_id": buyer_id, "name": name, "sentences": built.sentences}, 201)
+
     async def info(request: Request) -> JSONResponse:
         return JSONResponse({"trade_http": trade, "phone_url": os.environ.get("PHONE_URL")})
 
@@ -157,6 +213,9 @@ def create_app(trade_http: str | None = None) -> Starlette:
         Route("/api/events", events_post, methods=["POST"]),
         Route("/api/events/clear", events_clear, methods=["POST"]),
         Route("/api/events/stream", events_stream),
+        Route("/api/onboarding/options", onboarding_opts),
+        Route("/api/onboarding/preview", onboarding_preview, methods=["POST"]),
+        Route("/api/onboarding", onboarding_submit, methods=["POST"]),
         Route("/api/info", info),
         Mount("/static", StaticFiles(directory=STATIC), name="static"),
     ]

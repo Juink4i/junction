@@ -32,9 +32,9 @@ class PhoneUser:
             time.sleep(0.1)
 
 
-async def test_all_five_scenes(fake):
+async def test_all_six_scenes(fake, tmp_path):
     cfg = DemoConfig(trade_http=fake.base_url, scripted=True, pause_s=0, wait_scale=0.05,
-                     overrides_file=fake.overrides)
+                     overrides_file=fake.overrides, buyers_dir=tmp_path)
     sink = EventSink(None, console=False)
     phone = PhoneUser(fake.base_url)
     try:
@@ -42,7 +42,19 @@ async def test_all_five_scenes(fake):
     finally:
         phone.stop.set()
 
-    assert outcomes == {"a": "approved", "b": "approved", "c": "approved", "d": "rejected", "e": "intact"}
+    assert outcomes == {"o": "confirmed", "a": "approved", "b": "approved", "c": "approved",
+                        "d": "rejected", "e": "intact"}
+
+    # Scene o: a new kitchen signed up, and its first order needed no person.
+    assert next(e for e in sink.history if e["kind"] == "scene")["onboard"] == "daycare"
+    signed_up = [e for e in sink.history if e["kind"] == "onboarded"]
+    assert len(signed_up) == 1 and signed_up[0]["buyer_name"] == "Päiväkoti Aurinko"
+    assert (tmp_path / signed_up[0]["buyer"] / "mandate.jwt").exists()
+    assert all("Aurinko" not in buyer for buyer, _ in phone.decisions)
+    started = next(e for e in sink.history if e["kind"] == "run_start")
+    assert any("lowest total price" in line for line in started["preferences"])
+    first_order = next(e for e in sink.history if e["kind"] == "tool_call" and e["tool"] == "place_order")
+    assert first_order["args"]["agent_signature"] == "[signed by the agent's key]"
 
     # Scene c: the server said "insufficient_stock", and the agent split the order into the
     # 700 L that was left plus a lactose-free substitute.
