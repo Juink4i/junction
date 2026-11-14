@@ -44,7 +44,10 @@ class Settings:
     today: date = field(default_factory=date.today)
     profile: dict | None = None  # preferences from onboarding; never rules
     agent_key_file: Path | None = None  # the agent's private key, when the mandate names its public half
-    steps_per_input: int = 40  # model calls allowed since the buyer last said something
+    # Both counted since the buyer last said something. Calibrated on the audit log: every run
+    # that ended in an order found its product on the first search.
+    steps_per_input: int = 15  # model calls
+    searches_per_input: int = 5
 
     @property
     def buyer_name(self) -> str:

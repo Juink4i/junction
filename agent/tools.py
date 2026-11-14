@@ -86,6 +86,7 @@ class Toolbox:
         self.orders: list[dict[str, Any]] = []
         self.outcome: str | None = None  # last order: confirmed, pending_approval, approved, ...
         self.budget = StepBudget(settings.steps_per_input)
+        self.searches = StepBudget(settings.searches_per_input)
 
     async def _call(self, tool: str, args: dict[str, Any], shown: dict[str, Any] | None = None) -> Any:
         call_id = uuid.uuid4().hex[:8]
@@ -161,6 +162,12 @@ class Toolbox:
               amount: How much is needed, if known. It helps leave out packs of the wrong size.
               unit: "L", "KG" or "PCS" (pieces), the unit of amount, or the buyer's own word.
             """
+            if not box.searches.take():
+                # Without this a model that finds nothing guesses unrelated words on and on.
+                return {"status": "search_limit",
+                        "message": f"You have used {box.searches.limit} searches since the buyer's "
+                                   "last message. Do not search again: tell the buyer what you "
+                                   "searched and what the server said, and ask what they need."}
             args: dict[str, Any] = {"product": product}
             if must_have:
                 args["must_have"] = must_have
@@ -283,6 +290,7 @@ class Toolbox:
                         "answer": "The buyer did not answer. Do not go ahead; summarise and stop."}
             box.sink.publish("answer", text=answer)
             box.budget.reset()  # the buyer is still here: a fresh step budget
+            box.searches.reset()
             return {"answered": True, "answer": answer}
 
         async def get_audit_log(order_id: str | None = None, quote_id: str | None = None) -> dict:

@@ -114,6 +114,47 @@ async def test_no_answer_does_not_reset_the_step_budget(fake):
     assert "4 steps" in result.summary
 
 
+# The search cap: a few searches per buyer message, then the agent must report back.
+# Calibrated on the audit log: every run that ended in an order found its product on the
+# first search; runs that went on past five only found the wrong products.
+
+def test_the_defaults_are_five_searches_and_fifteen_steps():
+    settings = Settings(server_url="http://x", web_url=None, model="m", mandate_token="t")
+    assert (settings.searches_per_input, settings.steps_per_input) == (5, 15)
+
+
+async def test_the_sixth_search_is_answered_without_asking_the_server(fake):
+    seen = []
+
+    def stop_and_report(last):
+        seen.append(last)
+        return ("text", "Nothing fits; here is what I searched.")
+
+    script = ScriptedLlm(steps=[_search] * 6 + [stop_and_report])
+    settings = Settings(server_url=fake.mcp_url, web_url=None, model=script,
+                        mandate_token="demo-cafe", steps_per_input=40)
+    sink = EventSink(None, console=False)
+
+    result = await run_buyer("Philippine coffee beans", settings, sink, make_ask([], interactive=False))
+
+    assert _searches(sink.history) == 5
+    assert seen[0]["status"] == "search_limit"
+    assert "5 searches" in seen[0]["message"] and "tell the buyer" in seen[0]["message"]
+    assert result.summary == "Nothing fits; here is what I searched."
+
+
+async def test_each_buyer_answer_gives_fresh_searches(fake):
+    script = ScriptedLlm(steps=[_search] * 5 + [lambda _: ("call", "ask_buyer", {"question": "Which origin?"})]
+                         + [_search] * 5 + [lambda _: ("text", "Found Brazilian beans.")])
+    settings = Settings(server_url=fake.mcp_url, web_url=None, model=script,
+                        mandate_token="demo-cafe", steps_per_input=40)
+    sink = EventSink(None, console=False)
+
+    await run_buyer("coffee beans", settings, sink, make_ask(["brazil"], interactive=False))
+
+    assert _searches(sink.history) == 10
+
+
 async def test_a_refused_mandate_ends_the_run_with_the_onboarding_link(monkeypatch):
     from agent.mcp_link import MandateRefused
 
