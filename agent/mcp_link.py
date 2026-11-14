@@ -10,7 +10,10 @@ import json
 from contextlib import AsyncExitStack
 from typing import Any
 
+import httpx
+import httpx2
 from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import Implementation
 
 CLIENT_INFO = Implementation(name="valio-buyer-agent", version="0.1.0")
@@ -18,6 +21,14 @@ CLIENT_INFO = Implementation(name="valio-buyer-agent", version="0.1.0")
 
 class TradeServerUnreachable(RuntimeError):
     pass
+
+
+class MandateRefused(RuntimeError):
+    """The trade server did not accept the mandate. Carries its reason and the onboarding link."""
+
+    def __init__(self, code: str, message: str, onboarding_url: str | None = None):
+        super().__init__(message)
+        self.code, self.message, self.onboarding_url = code, message, onboarding_url
 
 
 def _error(code: str, message: str, retryable: bool = False) -> dict[str, Any]:
@@ -60,18 +71,52 @@ def parse_result(result) -> Any:
 
 
 class TradeLink:
-    """`async with TradeLink(url) as link: await link.call("search_products", {...})`"""
+    """`async with TradeLink(url, mandate_token) as link: await link.call("search_products", {...})`
 
-    def __init__(self, url: str, *, timeout_s: float = 60):
+    The mandate travels as a bearer token on every request. The AI model never sees it.
+    """
+
+    def __init__(self, url: str, token: str = "", *, timeout_s: float = 60):
         self.url = url
+        self.token = token
         self.timeout_s = timeout_s
         self._stack: AsyncExitStack | None = None
         self._client: Client | None = None
 
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
+
+    async def _check_mandate(self) -> None:
+        """Ask the server whether it accepts the mandate, to learn why if it does not.
+
+        The MCP client only reports that the connection failed. A server without this
+        endpoint, or one that is down, is left for the connection attempt to report.
+        """
+        base = self.url.rstrip("/").removesuffix("/mcp")
+        try:
+            async with httpx.AsyncClient(timeout=10) as http:
+                response = await http.get(f"{base}/mandate", headers=self._headers())
+        except httpx.HTTPError:
+            return
+        if response.status_code != 401:
+            return
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        if isinstance(body, dict) and body.get("code"):
+            raise MandateRefused(str(body["code"]),
+                                 str(body.get("message") or "The mandate was not accepted."),
+                                 body.get("onboarding_url"))
+
     async def __aenter__(self) -> "TradeLink":
+        await self._check_mandate()
         self._stack = AsyncExitStack()
         try:
-            client = Client(self.url, client_info=CLIENT_INFO, read_timeout_seconds=self.timeout_s)
+            http = await self._stack.enter_async_context(httpx2.AsyncClient(
+                headers=self._headers(), timeout=httpx2.Timeout(30.0, read=300.0)))
+            client = Client(streamable_http_client(self.url, http_client=http),
+                            client_info=CLIENT_INFO, read_timeout_seconds=self.timeout_s)
             self._client = await self._stack.enter_async_context(client)
         except BaseException as exc:  # connection errors arrive wrapped in exception groups
             await self._stack.aclose()

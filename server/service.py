@@ -53,6 +53,21 @@ def locked(method):
     return wrapper
 
 
+@dataclasses.dataclass(frozen=True)
+class Buyer:
+    """Who a tool call is from: the buyer behind the mandate the connection showed."""
+    buyer_id: str
+    mandate: dict
+
+    @property
+    def actor(self) -> str:
+        return str(self.mandate["agent_id"])
+
+    @property
+    def name(self) -> str:
+        return str(self.mandate["buyer"])
+
+
 class Service:
     def __init__(self, conn: sqlite3.Connection, catalog: Any, now: Callable[[], datetime],
                  unusual_scorer: Any = None, require_enrolment_code: bool = False):
@@ -67,6 +82,19 @@ class Service:
     def _log(self, actor: str, action: str, reason: str, order_id: str | None = None,
              quote_id: str | None = None) -> None:
         audit.append(self.conn, self.now(), actor, action, reason, order_id, quote_id)
+
+    @locked
+    def authenticate(self, token: str | None) -> Buyer:
+        """The buyer behind a mandate token. Raises MandateError; every refusal is logged."""
+        try:
+            if not token:
+                raise MandateError("No mandate was shown. Connect with the buyer's signed mandate "
+                                   "as a bearer token.", code="mandate_missing")
+            buyer_id, mandate = verify_mandate(token, self.conn, self.now().date())
+        except MandateError as e:
+            self._log("unknown agent", "connect:refused", f"A connection was refused. {e}")
+            raise
+        return Buyer(buyer_id, mandate)
 
     # Buyers
 

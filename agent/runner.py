@@ -11,7 +11,7 @@ from typing import Any
 from agent.config import Settings
 from agent.events import EventSink
 from agent.instructions import build_instruction, preference_lines
-from agent.mcp_link import TradeLink
+from agent.mcp_link import MandateRefused, TradeLink
 from agent.tools import AskFn, Toolbox
 
 APP_NAME = "valio_buyer"
@@ -49,6 +49,8 @@ class RunResult:
     quotes: list[dict[str, Any]] = field(default_factory=list)
     orders: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
+    mandate_problem: str | None = None  # the server did not accept the mandate; go back to onboarding
+
 
 
 def make_ask(replies: list[str], interactive: bool | None = None) -> AskFn:
@@ -101,32 +103,42 @@ async def run_buyer(request: str, settings: Settings, sink: EventSink,
     sink.publish("user", text=request)
     result = RunResult()
 
-    async with TradeLink(settings.server_url) as link:
-        toolbox = Toolbox(link, settings, sink, ask)
-        sessions = InMemorySessionService()
-        runner = Runner(app_name=APP_NAME, agent=build_agent(settings, toolbox), session_service=sessions)
-        session = await sessions.create_session(app_name=APP_NAME, user_id=settings.buyer)
-        message = types.Content(role="user", parts=[types.Part(text=request)])
-        try:
-            async for event in runner.run_async(user_id=settings.buyer, session_id=session.id,
-                                                new_message=message,
-                                                run_config=RunConfig(max_llm_calls=MAX_LLM_CALLS)):
-                if event.author == "user" or not event.content or not event.content.parts:
-                    continue
-                texts = [p.text for p in event.content.parts if p.text and not p.thought]
-                if texts and not event.partial:
-                    text = "\n".join(texts).strip()
-                    sink.publish("agent", text=text)
-                    result.summary = text
-        except Exception as exc:  # the model or network failed; report it, never guess
-            result.error = f"{type(exc).__name__}: {exc}"
-            sink.publish("note", text=f"The agent stopped because of an error: {result.error}")
-        finally:
-            await runner.close()
+    toolbox: Toolbox | None = None
+    try:
+        async with TradeLink(settings.server_url, settings.mandate_token) as link:
+            toolbox = Toolbox(link, settings, sink, ask)
+            sessions = InMemorySessionService()
+            runner = Runner(app_name=APP_NAME, agent=build_agent(settings, toolbox),
+                            session_service=sessions)
+            session = await sessions.create_session(app_name=APP_NAME, user_id=settings.buyer)
+            message = types.Content(role="user", parts=[types.Part(text=request)])
+            try:
+                async for event in runner.run_async(user_id=settings.buyer, session_id=session.id,
+                                                    new_message=message,
+                                                    run_config=RunConfig(max_llm_calls=MAX_LLM_CALLS)):
+                    if event.author == "user" or not event.content or not event.content.parts:
+                        continue
+                    texts = [p.text for p in event.content.parts if p.text and not p.thought]
+                    if texts and not event.partial:
+                        text = "\n".join(texts).strip()
+                        sink.publish("agent", text=text)
+                        result.summary = text
+            except Exception as exc:  # the model or network failed; report it, never guess
+                result.error = f"{type(exc).__name__}: {exc}"
+                sink.publish("note", text=f"The agent stopped because of an error: {result.error}")
+            finally:
+                await runner.close()
+    except MandateRefused as refused:
+        where = refused.onboarding_url or "the onboarding page"
+        result.mandate_problem = f"{refused.message} Sign a new mandate at {where}."
+        result.error = f"mandate refused ({refused.code})"
+        sink.publish("note", text="Valio Aimo did not accept this kitchen's mandate. "
+                                  f"{result.mandate_problem}")
 
-    result.outcome = toolbox.outcome
-    result.request = toolbox.request
-    result.quotes = toolbox.quotes
-    result.orders = toolbox.orders
+    if toolbox is not None:
+        result.outcome = toolbox.outcome
+        result.request = toolbox.request
+        result.quotes = toolbox.quotes
+        result.orders = toolbox.orders
     sink.publish("run_end", outcome=result.outcome, summary=result.summary, error=result.error)
     return result

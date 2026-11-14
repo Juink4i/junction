@@ -57,3 +57,31 @@ async def test_hotel_order_goes_to_a_person_and_is_approved(fake):
     for kind in ("run_start", "user", "request", "tool_call", "tool_result", "decision", "waiting",
                  "agent", "run_end"):
         assert kind in kinds, kind
+
+
+async def test_a_refused_mandate_ends_the_run_with_the_onboarding_link(monkeypatch):
+    from agent.mcp_link import MandateRefused
+
+    class Refusing:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            raise MandateRefused("mandate_expired", "The mandate expired on 2026-01-01.",
+                                 "http://localhost:8080/onboarding")
+
+        async def __aexit__(self, *exc):
+            return None
+
+    monkeypatch.setattr("agent.runner.TradeLink", Refusing)
+    sink = EventSink(None, console=False)
+    settings = Settings(server_url="unused", web_url=None, model=ScriptedLlm(steps=[]),
+                        mandate_token="old-token")
+
+    result = await run_buyer("Milk, please", settings, sink, make_ask([], interactive=False))
+
+    assert result.outcome is None
+    assert "expired on 2026-01-01" in result.mandate_problem
+    note = next(e for e in sink.history if e["kind"] == "note")
+    assert "http://localhost:8080/onboarding" in note["text"]
+    assert sink.history[-1]["kind"] == "run_end"

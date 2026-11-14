@@ -29,3 +29,30 @@ async def test_unreachable_server_gives_a_clear_error():
     with pytest.raises(TradeServerUnreachable, match="127.0.0.1:9"):
         async with TradeLink("http://127.0.0.1:9/mcp"):
             pass
+
+
+async def test_a_refused_mandate_raises_with_the_servers_reason():
+    import pytest
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    from agent.mcp_link import MandateRefused
+    from demo.servers import run_in_thread
+
+    async def mandate(request):
+        assert request.headers["authorization"] == "Bearer old-token"
+        return JSONResponse({"code": "mandate_expired", "message": "The mandate expired on 2026-01-01.",
+                             "retryable": False, "onboarding_url": "http://localhost:8080/onboarding"},
+                            status_code=401)
+
+    running = run_in_thread(Starlette(routes=[Route("/mandate", mandate)]))
+    try:
+        with pytest.raises(MandateRefused) as refused:
+            async with TradeLink(f"{running.base_url}/mcp", "old-token"):
+                pass
+    finally:
+        running.stop()
+    assert refused.value.code == "mandate_expired"
+    assert "2026-01-01" in refused.value.message
+    assert refused.value.onboarding_url == "http://localhost:8080/onboarding"

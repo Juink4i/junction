@@ -61,10 +61,13 @@ def anyio_backend():
 
 
 @pytest.fixture(autouse=True)
-def tokens():
+def tokens(monkeypatch):
     svc = Service(connect(":memory:"), fake_catalog, lambda: datetime.now(timezone.utc))
     server_app.use_service(svc)
-    yield issue_demo_mandates(svc.conn)
+    issued = issue_demo_mandates(svc.conn)
+    # An in-process client has no headers, so say which mandate the connection showed.
+    monkeypatch.setattr(server_app, "_token", lambda ctx: issued["hotel"])
+    yield issued
     server_app.use_service(None)
 
 
