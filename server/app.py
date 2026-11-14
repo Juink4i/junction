@@ -138,14 +138,14 @@ def place_order(ctx: Context, quote_id: str, mandate_token: str, rationale: str,
 @mcp.tool()
 def get_approval_status(ctx: Context, approval_id: str) -> dict[str, Any]:
     """Whether a human has decided on an order: pending, approved or rejected."""
-    return service().get_approval_status(approval_id, actor=_actor(ctx))
+    return service().get_approval_status(approval_id, actor=_actor(ctx), caller=_caller(ctx))
 
 
 @mcp.tool()
 def get_audit_log(ctx: Context, order_id: str | None = None,
                   quote_id: str | None = None) -> list[dict[str, Any]] | dict[str, Any]:
     """The plain-language decision trail for one order or quote. Give one of the two ids."""
-    return service().get_audit_log(order_id, quote_id, actor=_actor(ctx))
+    return service().get_audit_log(order_id, quote_id, actor=_actor(ctx), caller=_caller(ctx))
 
 
 @mcp.custom_route("/buyers", methods=["POST"])

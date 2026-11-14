@@ -171,6 +171,59 @@ async def test_an_agent_cannot_order_for_another_kitchen(world):
     assert row["actor"] == "agent-aurinko-3f2a" and "Café Sointu" in row["reason"]
 
 
+async def _order(world, kitchen, litres):
+    """kitchen's agent quotes and orders; returns (quote, result)."""
+    async with TradeLink(world.mcp, mandate_token=kitchen.mandate_token,
+                         agent_key_file=kitchen.agent_key_file) as link:
+        quote = await link.call("request_quote", {"need_by": NEED_BY, "lines": [
+            {"product_id": "464201", "amount": litres, "unit": "L"}]})
+        signature = sign_order(kitchen.agent_key_file, kitchen.mandate_token, quote["quote_id"], False)
+        result = await link.call("place_order", {
+            "quote_id": quote["quote_id"], "mandate_token": kitchen.mandate_token,
+            "rationale": "test", "agent_signature": signature})
+    return quote, result
+
+
+async def _as(world, kitchen, tool, args):
+    async with TradeLink(world.mcp, mandate_token=kitchen.mandate_token,
+                         agent_key_file=kitchen.agent_key_file) as link:
+        return await link.call(tool, args)
+
+
+async def test_an_agent_reads_only_its_own_kitchens_audit_log(world):
+    quote, result = await _order(world, world.aurinko, 40)
+    own = await _as(world, world.aurinko, "get_audit_log", {"order_id": result["order_id"]})
+    assert len(own) >= 2
+    # Another kitchen's agent gets exactly what an unknown id gets: nothing.
+    unknown = await _as(world, world.sointu, "get_audit_log", {"order_id": "ord_does_not_exist"})
+    for args in ({"order_id": result["order_id"]}, {"quote_id": quote["quote_id"]},
+                 {"order_id": "ord_does_not_exist", "quote_id": quote["quote_id"]}):
+        assert await _as(world, world.sointu, "get_audit_log", args) == unknown == []
+
+
+async def test_an_agent_reads_its_own_quote_before_ordering_but_not_anothers(world):
+    async with TradeLink(world.mcp, mandate_token=world.aurinko.mandate_token,
+                         agent_key_file=world.aurinko.agent_key_file) as link:
+        quote = await link.call("request_quote", {"need_by": NEED_BY, "lines": [
+            {"product_id": "464201", "amount": 40, "unit": "L"}]})
+        assert await link.call("get_audit_log", {"quote_id": quote["quote_id"]})
+    assert await _as(world, world.sointu, "get_audit_log", {"quote_id": quote["quote_id"]}) == []
+
+
+async def test_an_agent_sees_only_its_own_kitchens_approvals(world):
+    _, result = await _order(world, world.aurinko, 2000)  # over €500 per order: needs a person
+    assert result["status"] == "pending_approval", result
+    own = await _as(world, world.aurinko, "get_approval_status", {"approval_id": result["approval_id"]})
+    assert own["status"] == "pending"
+    # The agent's link hands tool errors back as {"error": {code, message, retryable}}.
+    other = (await _as(world, world.sointu, "get_approval_status",
+                       {"approval_id": result["approval_id"]}))["error"]
+    missing = (await _as(world, world.sointu, "get_approval_status",
+                         {"approval_id": "apr_does_not_exist"}))["error"]
+    assert other["code"] == missing["code"] == "approval_not_found"
+    assert other["message"] == missing["message"].replace("apr_does_not_exist", result["approval_id"])
+
+
 async def test_a_refused_agent_gets_a_clear_error(world):
     ensure_agent_key("hotel", world.buyers)
     with pytest.raises(TradeServerRefused, match="agent_key_missing"):

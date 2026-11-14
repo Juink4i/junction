@@ -464,8 +464,14 @@ class Service:
     # Approvals
 
     @locked
-    def get_approval_status(self, approval_id: str, actor: str = "agent") -> dict:
-        row = self.conn.execute("SELECT * FROM approvals WHERE approval_id = ?", (approval_id,)).fetchone()
+    def get_approval_status(self, approval_id: str, actor: str = "agent",
+                            caller: dict | None = None) -> dict:
+        row = self.conn.execute(
+            "SELECT a.*, o.buyer_id FROM approvals a JOIN orders o USING (order_id) "
+            "WHERE a.approval_id = ?", (approval_id,)).fetchone()
+        # Another kitchen's approval looks exactly like one that does not exist.
+        if row is not None and caller and row["buyer_id"] != caller["buyer_id"]:
+            row = None
         if row is None:
             self._log(actor, "get_approval_status", f"Asked about approval {approval_id}, which does not exist.")
             return error("approval_not_found", f"No approval with id {approval_id}.")
@@ -536,16 +542,37 @@ class Service:
 
     @locked
     def get_audit_log(self, order_id: str | None = None, quote_id: str | None = None,
-                      actor: str = "agent") -> list[dict] | dict:
+                      actor: str = "agent", caller: dict | None = None) -> list[dict] | dict:
         if not order_id and not quote_id:
             self._log(actor, "get_audit_log", "Asked for the log without an order or quote id.")
             return error("missing_filter", "Give an order_id or a quote_id.")
-        if order_id:
+        if caller:
+            order_id, quote_id = self._own_ids(caller, order_id, quote_id)
+        elif order_id:
             order = self._order(order_id=order_id)
             quote_id = quote_id or (order["quote_id"] if order else None)
-        found = audit.entries(self.conn, order_id=order_id, quote_id=quote_id)
+        found = audit.entries(self.conn, order_id=order_id, quote_id=quote_id)             if order_id or quote_id else []
         self._log(actor, "get_audit_log", f"Read the log for {order_id or quote_id}: {len(found)} entries.")
         return found
+
+    def _own_ids(self, caller: dict, order_id: str | None,
+                 quote_id: str | None) -> tuple[str | None, str | None]:
+        """The order and quote ids an agent may read the log for: only its own kitchen's.
+
+        Anything else is dropped, so another kitchen's trail looks exactly like an unknown id.
+        A quote that was never ordered is the agent's own if that agent requested it."""
+        if order_id:
+            order = self._order(order_id=order_id)
+            if order is None or order["buyer_id"] != caller["buyer_id"]:
+                return None, None
+            return order_id, order["quote_id"]  # never another quote smuggled in beside it
+        order = self._order(quote_id=quote_id)
+        if order is not None:
+            return (None, quote_id) if order["buyer_id"] == caller["buyer_id"] else (None, None)
+        asked = self.conn.execute(
+            "SELECT 1 FROM log WHERE quote_id = ? AND action = 'request_quote' AND actor = ?",
+            (quote_id, caller["agent_id"])).fetchone()
+        return (None, quote_id) if asked else (None, None)
 
     @locked
     def full_log(self) -> list[dict]:
