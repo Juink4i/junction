@@ -1,5 +1,6 @@
 """The buyer edits its own mandate; web/ signs it with the buyer's key and registers it."""
 
+import json
 from datetime import date
 
 import jwt
@@ -221,7 +222,10 @@ def test_rejects_bad_budget_and_days(client, world, body, words):
 
 
 @pytest.mark.parametrize("body", [{"budget": {"limit": 1}}, {"delivery": {"note": "back door"}},
-                                  {"agent_key": "x"}, {"usual_orders": []}, {"budget": 5}])
+                                  {"agent_key": "x"}, {"budget": 5},
+                                  {"usual_orders": "40 L milk"},
+                                  {"usual_orders": [{"category": "10400", "amount": 40, "content_unit": "L",
+                                                     "every": "week", "price": 1}]}])
 def test_new_fields_that_are_not_editable(client, world, body):
     res = client.put(f"/api/accounts/{KID}/mandate", json=body)
     assert res.status_code == 400 and res.json()["code"] == "bad_field"
@@ -234,4 +238,91 @@ def test_onboarded_key_that_does_not_match_is_refused(client, world):
     res = client.put(f"/api/accounts/{KID}/mandate", json={"budget": {"max_eur": 1000}})
     assert res.status_code == 409 and res.json()["code"] == "key_mismatch"
     assert path.read_text() == token
+    assert _updates(world.conn) == []
+
+
+# Usual orders: the mandate holds the amounts, the profile the plain names. One PUT changes both.
+
+
+def _profile(world, buyer_id: str) -> dict:
+    return json.loads((world.buyers / buyer_id / "profile.json").read_text())
+
+
+def test_usual_orders_change_in_the_mandate_and_the_profile(client, world):
+    order = {"what": "lactose-free milk, 1 L", "category": "10400", "amount": 60,
+             "content_unit": "L", "every": "week", "on": "THU"}
+    res = client.put(f"/api/accounts/{KID}/mandate", json={"usual_orders": [order]})
+    assert res.status_code == 200, res.text
+    assert res.json()["mandate_verified"] is True
+    m = res.json()["mandate"]
+    assert m["mandate_id"] == f"mnd_{KID}_002"
+    assert m["usual_orders"] == [{"category": "10400", "amount": 60, "content_unit": "L",
+                                  "every": "week", "on": "THU"}]
+    assert _profile(world, KID)["usual_orders"] == [{"what": "lactose-free milk, 1 L", "amount": 60,
+                                                     "unit": "L", "every": "week", "on": "THU"}]
+    [row] = _updates(world.conn)
+    assert ("usual orders 40 L of Milk and sour milk every week → "
+            "60 L of Milk and sour milk every week on Thursday") in row["reason"]
+
+
+def test_renaming_a_usual_order_changes_only_the_profile(client, world):
+    token = (world.buyers / KID / "mandate.jwt").read_text()
+    order = {"what": "oat-free milk", "category": "10400", "amount": 40, "content_unit": "L", "every": "week"}
+    res = client.put(f"/api/accounts/{KID}/mandate", json={"usual_orders": [order]})
+    assert res.status_code == 200, res.text
+    assert res.json()["mandate"]["mandate_id"] == f"mnd_{KID}_001"
+    assert (world.buyers / KID / "mandate.jwt").read_text() == token
+    assert _profile(world, KID)["usual_orders"][0]["what"] == "oat-free milk"
+    assert _updates(world.conn) == []
+
+
+def test_no_usual_orders_removes_them_from_both(client, world):
+    res = client.put(f"/api/accounts/{KID}/mandate", json={"usual_orders": []})
+    assert res.status_code == 200, res.text
+    assert "usual_orders" not in res.json()["mandate"]
+    assert _profile(world, KID)["usual_orders"] == []
+    [row] = _updates(world.conn)
+    assert "→ none" in row["reason"]
+
+
+def test_usual_order_without_a_name_is_named_after_its_category(client, world):
+    order = {"category": "10400", "amount": 50, "content_unit": "L", "every": "month", "on": 15}
+    assert client.put(f"/api/accounts/{KID}/mandate", json={"usual_orders": [order]}).status_code == 200
+    assert _profile(world, KID)["usual_orders"] == [{"what": "Milk and sour milk", "amount": 50,
+                                                     "unit": "L", "every": "month", "on": 15}]
+
+
+def test_demo_buyer_gets_usual_orders_but_no_profile(client, world):
+    order = {"what": "milk", "category": "10400", "amount": 20, "content_unit": "L", "every": "week"}
+    res = client.put("/api/accounts/cafe/mandate", json={"usual_orders": [order]})
+    assert res.status_code == 200, res.text
+    assert res.json()["mandate"]["usual_orders"] == [{"category": "10400", "amount": 20,
+                                                      "content_unit": "L", "every": "week"}]
+    assert not (world.buyers / "cafe").exists()
+
+
+def _usual(**change) -> dict:
+    return {"usual_orders": [{"what": "milk", "category": "10400", "amount": 40, "content_unit": "L",
+                              "every": "week", **change}]}
+
+
+@pytest.mark.parametrize("body,words", [
+    (_usual(amount=0), "amount above zero"),
+    (_usual(content_unit="box"), "L or KG"),
+    (_usual(every="day"), "every week or every month"),
+    (_usual(on="XYZ"), "pick a day of the week"),
+    (_usual(every="month", on=40), "1 to 31"),
+    (_usual(category="99999"), "unknown category"),
+    (_usual(category="10401"), "may not buy"),
+    ({"auto_approve": {"allowed_categories": ["10401"]}}, "may not buy"),
+])
+def test_rejects_bad_usual_orders(client, world, body, words):
+    token = (world.buyers / KID / "mandate.jwt").read_text()
+    profile = _profile(world, KID)
+    res = client.put(f"/api/accounts/{KID}/mandate", json=body)
+    assert res.status_code == 400, res.text
+    assert res.json()["code"] == "bad_mandate"
+    assert words in res.json()["message"]
+    assert (world.buyers / KID / "mandate.jwt").read_text() == token
+    assert _profile(world, KID) == profile
     assert _updates(world.conn) == []

@@ -3,7 +3,10 @@
 A change is merged into the current mandate, checked, given the next version number,
 signed with the buyer's own key and written back to the file it came from (see
 web.accounts.MandateFiles), so the agent picks it up on its next run. Every field the
-editor does not touch (agent_key, usual_orders, no_delivery_after, ...) stays as it was.
+editor does not touch (agent_key, no_delivery_after, ...) stays as it was.
+
+Usual orders live in two files: their amounts in the mandate, their plain names ("what") in
+the onboarded kitchen's profile.json. A change to them rewrites both, so they never drift.
 
 Keys: a kitchen that signed up on the onboarding page keeps its key in
 data/buyers/<id>/buyer_key.pem, which Valio Aimo already knows, so it is never rotated.
@@ -18,6 +21,7 @@ in register() below.
 from __future__ import annotations
 
 import copy
+import json
 import math
 import os
 import re
@@ -30,6 +34,8 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from catalog.names import CATEGORY_NAMES
+from onboarding.build import usual_order_problems
 from server import audit, signing
 from server.db import connect, transaction
 from server.mandate import UNKNOWN_ALLERGEN_RULES, WEEKDAYS, _shape_problems
@@ -37,7 +43,7 @@ from server.policy import WEEKDAY_NAMES, eur
 from web.accounts import MandateFiles, decode_unverified, open_ro
 
 # What a buyer may change. Everything else (mandate_id, buyer, agent_id, agent_key,
-# usual_orders, no_delivery_after) stays as it was signed.
+# no_delivery_after) stays as it was signed.
 EDITABLE = {
     "auto_approve": {"max_order_eur", "max_line_eur", "allowed_categories"},
     "substitution": {"allowed", "must_keep", "max_price_increase_pct"},
@@ -46,7 +52,9 @@ EDITABLE = {
     "delivery": {"days"},
     "approvers": None,
     "valid_until": None,
+    "usual_orders": None,
 }
+USUAL_ORDER_FIELDS = {"what", "category", "amount", "content_unit", "every", "on"}
 # Sections that null removes: no budget cap, goods may arrive any day.
 REMOVABLE = {"budget", "delivery"}
 
@@ -69,11 +77,11 @@ def merge(current: dict, change: Any) -> dict:
         if key not in EDITABLE:
             raise EditError("bad_field", f"{key} cannot be changed here.")
         fields = EDITABLE[key]
+        if (value is None and key in REMOVABLE) or (key == "usual_orders" and not value):
+            new.pop(key, None)
+            continue
         if fields is None:
             new[key] = value
-            continue
-        if value is None and key in REMOVABLE:
-            new.pop(key, None)
             continue
         if not isinstance(value, dict):
             raise EditError("bad_field", f"{key} must be an object with the fields to change.")
@@ -94,6 +102,27 @@ def merge(current: dict, change: Any) -> dict:
     if new.get("delivery") == {}:
         new.pop("delivery")
     return new
+
+
+def split_names(change: Any) -> tuple[Any, list[str] | None]:
+    """The change without the usual orders' names, and those names (None when the change
+    leaves usual orders alone). Raises EditError("bad_field")."""
+    if not isinstance(change, dict) or "usual_orders" not in change:
+        return change, None
+    orders = change["usual_orders"] or []
+    if not isinstance(orders, list) or not all(isinstance(o, dict) for o in orders):
+        raise EditError("bad_field", "usual_orders must be a list of orders.")
+    stripped, names = [], []
+    for number, order in enumerate(orders, 1):
+        extra = set(order) - USUAL_ORDER_FIELDS
+        if extra:
+            raise EditError("bad_field", f"Usual order {number}: {', '.join(sorted(extra))} "
+                            "cannot be set here.")
+        if not isinstance(order.get("on"), (str, int, type(None))):
+            raise EditError("bad_field", f"Usual order {number}: on must be a weekday or a day of the month.")
+        names.append(str(order.get("what") or "").strip())
+        stripped.append({k: v for k, v in order.items() if k != "what" and not (k == "on" and v is None)})
+    return {**change, "usual_orders": stripped}, names
 
 
 def _weekdays(value: Any) -> bool:
@@ -145,6 +174,12 @@ def problems(mandate: dict, today: date) -> list[str]:
 
     if not mandate.get("approvers"):
         found.append("approvers needs at least one approver")
+
+    usual = mandate.get("usual_orders")
+    if isinstance(usual, list) and all(isinstance(o, dict) for o in usual):
+        allowed = limits.get("allowed_categories") or []
+        found += usual_order_problems([{**o, "unit": o.get("content_unit")} for o in usual],
+                                      allowed if isinstance(allowed, list) else [])
     return found
 
 
@@ -192,6 +227,19 @@ FIELDS = [  # (section, field, label, how to show the value)
     (None, "approvers", "approvers", lambda v: _list(v)),
     (None, "valid_until", "valid until", lambda v: str(v)),
 ]
+
+
+def _usual_order(o: Any) -> str:
+    if not isinstance(o, dict):
+        return str(o)
+    on = o.get("on")
+    when = ("" if on is None else f" on {WEEKDAY_NAMES.get(on, on)}" if o.get("every") == "week"
+            else f" on day {on}")
+    category = CATEGORY_NAMES.get(o.get("category"), o.get("category"))
+    return f"{o.get('amount'):g} {o.get('content_unit')} of {category} every {o.get('every')}{when}"
+
+
+FIELDS.append((None, "usual_orders", "usual orders", lambda v: _list(v, _usual_order, empty="none")))
 
 
 def changes(old: dict, new: dict) -> list[str]:
@@ -245,6 +293,20 @@ def _write_atomic(path: Path, text: str) -> None:
         raise
 
 
+def write_profile(path: Path, profile: dict) -> None:
+    _write_atomic(path, json.dumps(profile, ensure_ascii=False, indent=2))
+
+
+def _profile_orders(mandate: dict, names: list[str]) -> list[dict]:
+    """The profile's copy of the mandate's usual orders: same amounts, plus a plain name."""
+    out = []
+    for order, name in zip(mandate.get("usual_orders") or [], names):
+        entry = {"what": name or CATEGORY_NAMES[order["category"]], "amount": order["amount"],
+                 "unit": order["content_unit"], "every": order["every"]}
+        out.append({**entry, "on": order["on"]} if order.get("on") is not None else entry)
+    return out
+
+
 def register(state_db: Path, buyer_id: str, new_key: Ed25519PrivateKey | None, actor: str,
              reason: str) -> None:
     """The only writes web/ makes to state.db (the trade server owns it):
@@ -266,7 +328,8 @@ def register(state_db: Path, buyer_id: str, new_key: Ed25519PrivateKey | None, a
 
 def update_mandate(*, buyer_id: str, buyer_name: str, change: Any, files: MandateFiles,
                    keys_dir: Path, state_db: Path, today: date) -> bool:
-    """Apply a buyer's change to its mandate. Returns False when nothing changed.
+    """Apply a buyer's change to its mandate, and to its profile's usual orders.
+    Returns False when nothing changed.
 
     Raises EditError for a field that cannot be changed or a mandate that would be wrong.
     The new token goes to disk only; it is never returned."""
@@ -275,14 +338,29 @@ def update_mandate(*, buyer_id: str, buyer_name: str, change: Any, files: Mandat
     current = decode_unverified(token) if token else None
     if not isinstance(current, dict):
         raise EditError("mandate_missing", "This account has no readable mandate to change.")
+    change, names = split_names(change)
     new = merge(current, change)
     found = problems(new, today)
     if found:
         raise EditError("bad_mandate", "The mandate cannot be signed: " + "; ".join(found) + ".")
     diff = changes(current, new)
-    if not diff:
-        return False
 
+    profile_path = files.profile(buyer_id) if names is not None else None
+    profile = json.loads(profile_path.read_text(encoding="utf-8")) if profile_path else None
+    if profile is not None:
+        orders = _profile_orders(new, names)
+        profile = None if profile.get("usual_orders") == orders else {**profile, "usual_orders": orders}
+    if not diff and profile is None:
+        return False
+    if diff:
+        _sign_and_register(buyer_id, buyer_name, current, new, diff, path, files, keys_dir, state_db)
+    if profile is not None:
+        write_profile(profile_path, profile)  # after the mandate, which is the one that can fail
+    return True
+
+
+def _sign_and_register(buyer_id: str, buyer_name: str, current: dict, new: dict, diff: list[str],
+                       path: Path, files: MandateFiles, keys_dir: Path, state_db: Path) -> None:
     onboarded = files.onboarded_key(buyer_id)
     if onboarded is not None:
         # The kitchen's own key, registered at sign-up. Never rotated: check it still matches.

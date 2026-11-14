@@ -72,6 +72,13 @@ class MandateFiles:
         path = Path(self.buyers_dir) / buyer_id / "buyer_key.pem"
         return path if path.is_file() else None
 
+    def profile(self, buyer_id: str) -> Path | None:
+        """The kitchen's preferences from onboarding, or None for a demo buyer."""
+        if not SAFE_ID.fullmatch(buyer_id):
+            return None
+        path = Path(self.buyers_dir) / buyer_id / "profile.json"
+        return path if path.is_file() else None
+
     def read_token(self, buyer_id: str) -> str | None:
         """The buyer's mandate token. Only for checking and signing; never returned."""
         path = self.path(buyer_id)

@@ -86,8 +86,16 @@ def problems(answers: dict[str, Any]) -> list[str]:
         found.append("Rank each of the four priorities once: price, reliable delivery, "
                      "Finnish origin, sustainability.")
 
-    allowed = money.get("allowed_categories") or []
-    for number, order in enumerate(answers.get("usual_orders") or [], 1):
+    found += usual_order_problems(answers.get("usual_orders") or [],
+                                  money.get("allowed_categories") or [])
+    return found
+
+
+def usual_order_problems(orders: list[dict[str, Any]], allowed: list[str]) -> list[str]:
+    """What is wrong with usual orders given as {what, category, amount, unit, every, on}.
+    web.mandate_edit uses it too, so an edited mandate meets the same rules as a new one."""
+    found = []
+    for number, order in enumerate(orders, 1):
         if not _number(order.get("amount")) or order["amount"] <= 0:
             found.append(f"Usual order {number} needs an amount above zero.")
         if order.get("unit") not in ("L", "KG"):

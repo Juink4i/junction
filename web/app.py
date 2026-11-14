@@ -42,7 +42,7 @@ from onboarding.build import build, new_buyer_id, problems
 from onboarding.enroll import BUYERS_DIR, EnrollError, enroll
 from onboarding.options import options as onboarding_options
 from server.db import STATE_DB
-from web import accounts, admin, mandate_edit
+from web import accounts, admin, mandate_edit, profile_edit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).parent / "static"
@@ -374,6 +374,30 @@ def create_app(trade_http: str | None = None, buyers_dir: Path | None = None, *,
             return _error("bad_field", "Send a JSON object with only the fields to change.", 400)
         return await run_in_threadpool(mandate_put, request, change)
 
+    def account_profile_get(request: Request) -> Response:
+        def work(_: sqlite3.Connection, buyer_id: str) -> Any:
+            try:
+                return profile_edit.read_profile(mandates, buyer_id)
+            except mandate_edit.EditError as e:
+                return _error(e.code, str(e), 404)
+
+        return for_buyer(request, work)
+
+    async def account_profile_put(request: Request) -> Response:
+        try:
+            change = await request.json()
+        except ValueError:
+            return _error("bad_field", "Send a JSON object with only the fields to change.", 400)
+
+        def work(_: sqlite3.Connection, buyer_id: str) -> Any:
+            try:
+                with mandate_lock:  # a mandate edit may rewrite the same profile.json
+                    return profile_edit.update_profile(buyer_id=buyer_id, change=change, files=mandates)
+            except mandate_edit.EditError as e:
+                return _error(e.code, str(e), 404 if e.code == "profile_not_found" else 400)
+
+        return await run_in_threadpool(for_buyer, request, work)
+
     # Valio Aimo operations: every account. Events are copied on the event loop first.
 
     def _since_until(request: Request) -> tuple[datetime | None, datetime | None]:
@@ -440,6 +464,8 @@ def create_app(trade_http: str | None = None, buyers_dir: Path | None = None, *,
               methods=["POST"]),
         Route("/api/accounts/{buyer_id}/log", account_log),
         Route("/api/accounts/{buyer_id}/mandate", account_mandate, methods=["PUT"]),
+        Route("/api/accounts/{buyer_id}/profile", account_profile_get, methods=["GET"]),
+        Route("/api/accounts/{buyer_id}/profile", account_profile_put, methods=["PUT"]),
         Route("/api/admin/clients", admin_clients),
         Route("/api/admin/orders", admin_orders),
         Route("/api/admin/orders/{order_id}", admin_order),
