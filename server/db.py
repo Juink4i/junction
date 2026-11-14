@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS log (
 # as it is, so these are added one by one when a database is opened.
 ADDED_COLUMNS = {
     "quotes": (("buyer_id", "TEXT"), ("set_id", "TEXT"), ("rank", "INTEGER"), ("label", "TEXT")),
+    "orders": (("alternatives_json", "TEXT"),),
 }
 
 

@@ -34,3 +34,12 @@ def test_secrets_are_scrubbed_everywhere():
     e = sink.publish("tool_result", result={"nested": ["sk-very-secret-value", "ok"]})
     assert "sk-very-secret-value" not in str(e)
     assert scrub({"a": "x"}, []) == {"a": "x"}
+
+
+def test_a_place_order_summary_counts_the_alternatives_offered():
+    result = {"status": "pending_approval", "order_id": "ord_1", "approval_id": "apr_1",
+              "reasons": ["Over the order limit."],
+              "alternatives": [{"quote_id": "q_2", "rank": 2, "label": "better",
+                                "summary": "6 × 10 L Milk", "total_eur": 97.2}]}
+    assert summarize_result("place_order", result) == (
+        "pending_approval: Over the order limit. (1 alternatives offered)")

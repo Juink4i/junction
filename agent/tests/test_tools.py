@@ -208,3 +208,14 @@ async def test_place_order_sends_no_signature_when_the_agent_has_no_key():
     box, _ = _box(link)
     await _tools(box)["place_order"]("q_1", "Best option that arrives on time.")
     assert link.calls[0][1] == {"quote_id": "q_1", "rationale": "Best option that arrives on time."}
+
+
+async def test_alternatives_in_a_place_order_reply_reach_the_decision_event_and_the_model():
+    result = {"status": "pending_approval", "order_id": "ord_1", "approval_id": "apr_1",
+              "reasons": ["Over the order limit."],
+              "alternatives": [{"quote_id": "q_2", "rank": 2, "label": "better",
+                                "summary": "6 × 10 L Milk", "total_eur": 97.2}]}
+    box, sink = _box(RecordingLink(result))
+    assert await _tools(box)["place_order"]("q_1", "Best option that arrives on time.") == result
+    decision = next(e for e in sink.history if e["kind"] == "decision")
+    assert decision["alternatives"] == result["alternatives"]

@@ -24,6 +24,8 @@ QUOTE_TTL = timedelta(minutes=15)
 CANDIDATE_LIMIT = 100  # the most products one search hands to the seller
 MAX_QUOTE_PRODUCTS = 40  # the most products one quote request prices
 MAX_OPTIONS = 5
+MAX_ALTERNATIVES = 3
+WITHDRAWN = "Withdrawn: the buyer's agent ordered another option from the same request."
 SUMMARY_FIELDS = ("id", "name_en", "name_fi", "category", "sales_unit", "tags", "labels")
 PRODUCT_FIELDS = SUMMARY_FIELDS + (
     "allergens_contains", "allergens_may_contain", "allergens_free_from", "allergen_info_missing",
@@ -538,6 +540,8 @@ class Service:
         if order["approval_id"]:
             result["approval_id"] = order["approval_id"]
         result["reasons"] = json.loads(order["reasons_json"])
+        if order["alternatives_json"] and order["status"] != "confirmed":
+            result["alternatives"] = json.loads(order["alternatives_json"])
         return result
 
     def _order(self, **where: str) -> sqlite3.Row | None:
@@ -547,6 +551,67 @@ class Service:
     def _history(self, buyer_id: str) -> list[dict]:
         return [dict(row) for row in self.conn.execute(
             "SELECT category, amount, content_unit FROM order_history WHERE buyer_id = ?", (buyer_id,))]
+
+    def _one_live_order(self, set_id: str, quote_id: str, actor: str, now: datetime) -> str | None:
+        """Offering alternatives must not lead to buying twice. Returns a refusal, or None.
+
+        An order from the same request that is waiting for approval is withdrawn. One that is
+        already confirmed refuses the new order.
+        """
+        siblings = self.conn.execute(
+            "SELECT o.* FROM orders o JOIN quotes q USING (quote_id) WHERE q.set_id = ? "
+            "AND o.quote_id != ? AND o.status IN ('confirmed', 'pending_approval')",
+            (set_id, quote_id)).fetchall()
+        for order in siblings:
+            if order["status"] == "confirmed":
+                return (f"This request was already ordered as {order['order_id']}. "
+                        "Request a new quote to order again.")
+        for order in siblings:
+            reasons = json.loads(order["reasons_json"]) + [WITHDRAWN]
+            with transaction(self.conn):
+                self.conn.execute(
+                    "UPDATE orders SET status = 'rejected', reasons_json = ?, alternatives_json = NULL "
+                    "WHERE order_id = ?", (json.dumps(reasons), order["order_id"]))
+                self.conn.execute(
+                    "UPDATE approvals SET status = 'rejected', decided_by = ?, decided_at = ? "
+                    "WHERE order_id = ? AND status = 'pending'",
+                    (actor, now.isoformat(), order["order_id"]))
+            self._log(actor, "order:withdrawn",
+                      f"{WITHDRAWN} Order {order['order_id']} no longer waits for approval.",
+                      order_id=order["order_id"], quote_id=order["quote_id"])
+        return None
+
+    def _alternatives(self, set_id: str, quote_id: str, buyer: Buyer, history: list[dict],
+                      now: datetime) -> list[dict]:
+        """Other options from the same request that Policy would confirm on their own, best first.
+
+        Called before the order is saved, so the order they would replace is not counted
+        against their budget.
+        """
+        found = []
+        rows = self.conn.execute(
+            "SELECT * FROM quotes WHERE set_id = ? AND quote_id != ? ORDER BY rank",
+            (set_id, quote_id)).fetchall()
+        for row in rows:
+            quote = {**json.loads(row["body_json"]), "signature": row["signature"]}
+            try:
+                need_by = signing.check_quote(quote, self.key.public_key(), now)
+            except signing.QuoteError:
+                continue  # expired, or changed after it was issued
+            if self._order(quote_id=row["quote_id"]) is not None:
+                continue  # already ordered
+            products = {l["product_id"]: self.catalog.get_product(l["product_id"])
+                        for l in quote["lines"]}
+            products = {pid: p for pid, p in products.items() if p is not None}
+            if self._forecast(quote, need_by, buyer, products, history, now).status != "confirmed":
+                continue
+            summary = " + ".join(f"{l['units']:,} × {l['sales_unit']} {l['name']} "
+                                 f"({l['covers']:g} {l['content_unit']})" for l in quote["lines"])
+            found.append({"quote_id": row["quote_id"], "rank": row["rank"], "label": row["label"],
+                          "summary": summary, "total_eur": quote["total_eur"]})
+            if len(found) == MAX_ALTERNATIVES:
+                break
+        return found
 
     def _place_order(self, quote_id: str, mandate_token: str, rationale: str,
                      agent_signature: str | None = None) -> dict:
@@ -588,6 +653,11 @@ class Service:
             need_by = signing.check_quote(quote, self.key.public_key(), now)
         except signing.QuoteError as e:
             return self._refuse(quote_id, str(e))
+        set_id = quote_row["set_id"]
+        if set_id:
+            problem = self._one_live_order(set_id, quote_id, actor, now)
+            if problem:
+                return self._refuse(quote_id, problem)
 
         products = {l["product_id"]: self.catalog.get_product(l["product_id"]) for l in quote["lines"]}
         products = {pid: p for pid, p in products.items() if p is not None}
@@ -595,15 +665,20 @@ class Service:
         ai_unusual = self._ai_unusual(mandate["buyer"], history, quote, products, quote_id)
         decision = decide({**quote, "need_by": need_by.isoformat()}, mandate, products, history,
                           ai_unusual, self._spent_in_period(buyer_id, mandate, now, quote_id), now)
+        alternatives = []
+        if decision.status != "confirmed" and set_id:
+            alternatives = self._alternatives(set_id, quote_id, Buyer(buyer_id, mandate), history, now)
 
         order_id = _new_id("ord")
         approval_id = _new_id("apr") if decision.status == "pending_approval" else None
         with transaction(self.conn):
             self.conn.execute(
                 "INSERT INTO orders (order_id, quote_id, buyer_id, mandate_id, status, approval_id, "
-                "reasons_json, rationale, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "reasons_json, rationale, created_at, alternatives_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (order_id, quote_id, buyer_id, mandate["mandate_id"], decision.status, approval_id,
-                 json.dumps(decision.reasons), rationale, now.isoformat()),
+                 json.dumps(decision.reasons), rationale, now.isoformat(),
+                 json.dumps(alternatives) if alternatives else None),
             )
             if approval_id:
                 self.conn.execute(
@@ -613,6 +688,11 @@ class Service:
                 )
         self._log("policy", f"decision:{decision.status}", " ".join(decision.reasons),
                   order_id=order_id, quote_id=quote_id)
+        if alternatives:
+            self._log("policy", "alternatives",
+                      "Alternatives from the same request that would go through without a person: "
+                      + "; ".join(f"{a['summary']} for {eur(a['total_eur'])}" for a in alternatives) + ".",
+                      order_id=order_id, quote_id=quote_id)
         return self._order_result(self._order(order_id=order_id))
 
     def _spent_in_period(self, buyer_id: str, mandate: dict, now: datetime, quote_id: str) -> float:

@@ -460,6 +460,17 @@ def place_order(ctx: Context, quote_id: str, rationale: str,
             refs=(quote_id,))
         status, reasons = _decide(quote, m)
         result: dict[str, Any] = dict(status=status, reasons=reasons)
+        if status != "confirmed":
+            others = sorted((q for q in STATE.quotes.values()
+                             if q.get("set_id") == quote["set_id"] and q["quote_id"] != quote_id
+                             and q["quote_id"] not in STATE.orders and _decide(q, m)[0] == "confirmed"),
+                            key=lambda q: q["rank"])[:3]
+            if others:
+                result["alternatives"] = [
+                    dict(quote_id=q["quote_id"], rank=q["rank"], label=q["label"],
+                         summary=" + ".join(f"{ln['units']:,} × {ln['sales_unit']} {ln['name']}"
+                                            for ln in q["lines"]),
+                         total_eur=q["total_eur"]) for q in others]
         order_id = f"o_{quote_id[2:]}"
         if status in ("confirmed", "pending_approval"):
             result["order_id"] = order_id
