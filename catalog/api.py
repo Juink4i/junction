@@ -17,6 +17,7 @@ from typing import Literal
 from catalog import units
 from catalog.load import DB_PATH
 from catalog.models import Offer, Product, ProductSummary, UnitPlan
+from catalog.names import allergen_name, category_name  # noqa: F401  (re-exported)
 from catalog.overrides import Overrides
 
 AllergenStatus = Literal["contains", "may_contain", "free_from", "unknown"]
