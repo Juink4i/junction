@@ -25,8 +25,8 @@ def register(svc, agent_key=None):
     return token
 
 
-def order_signature(agent_key, quote_id, confirm_unusual=False, mandate_id=MANDATE["mandate_id"]):
-    payload = {"quote_id": quote_id, "mandate_id": mandate_id, "confirm_unusual": confirm_unusual}
+def order_signature(agent_key, quote_id, mandate_id=MANDATE["mandate_id"]):
+    payload = {"quote_id": quote_id, "mandate_id": mandate_id}
     return signing.sign(payload, agent_key, kid=AGENT_ID)
 
 
@@ -62,7 +62,7 @@ def test_a_copied_mandate_without_the_agents_signature_is_rejected(svc):
     lambda key, quote_id: order_signature(signing.generate_key(), quote_id),           # another key
     lambda key, quote_id: order_signature(key, "q_someone_elses"),                     # another quote
     lambda key, quote_id: order_signature(key, quote_id, mandate_id="mnd_other_001"),  # another mandate
-    lambda key, quote_id: order_signature(key, quote_id, confirm_unusual=True),        # flipped flag
+    lambda key, quote_id: signing.sign({"quote_id": quote_id}, key, kid=AGENT_ID),     # no mandate id
     lambda key, quote_id: "garbage",
     lambda key, quote_id: 12345,
 ])
@@ -75,19 +75,13 @@ def test_a_signature_that_does_not_match_this_order_is_rejected(svc, forge):
     assert orders(svc) == 0
 
 
-def test_confirming_an_unusual_amount_needs_a_signature_over_the_confirmation(svc):
+def test_an_unusual_signed_order_goes_to_a_human(svc):
     agent_key = signing.generate_key()
     token = register(svc, agent_key)
     quote_id = milk(svc, 240)["quote_id"]  # more than 5 x the usual 40 L
-    asked = svc.place_order(quote_id, token, "Party",
-                            agent_signature=order_signature(agent_key, quote_id))
-    assert asked["status"] == "needs_clarification"
-    replayed = svc.place_order(quote_id, token, "Party", confirm_unusual=True,
-                               agent_signature=order_signature(agent_key, quote_id))
-    assert replayed["status"] == "rejected"
-    confirmed = svc.place_order(quote_id, token, "Party", confirm_unusual=True,
-                                agent_signature=order_signature(agent_key, quote_id, confirm_unusual=True))
-    assert confirmed["status"] == "pending_approval"
+    result = svc.place_order(quote_id, token, "Party",
+                             agent_signature=order_signature(agent_key, quote_id))
+    assert result["status"] == "pending_approval"
 
 
 def test_a_mandate_without_an_agent_key_ignores_the_signature_input(svc):

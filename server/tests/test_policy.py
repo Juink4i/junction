@@ -2,6 +2,7 @@
 
 import copy
 from dataclasses import replace
+from datetime import datetime, timezone
 
 from server import fake_catalog
 from server.make_mandate import DEMO_MANDATES
@@ -99,7 +100,7 @@ def test_blocked_allergen_is_rejected():
 def test_blocked_allergen_wins_over_reasons_for_approval():
     pancake = line("460000", units=500, covers=1000.0, unit_price=9.8, content_unit="KG",
                    cutoff_passed=True)
-    decision = decide(quote(pancake), mandate("school"), PRODUCTS, [], confirm_unusual=True)
+    decision = decide(quote(pancake), mandate("school"), PRODUCTS, [])
     assert decision.status == "rejected"
 
 
@@ -115,11 +116,10 @@ def test_product_missing_from_the_catalog_is_rejected():
     assert decision.status == "rejected"
 
 
-def test_more_than_5_times_the_usual_amount_asks_the_agent():
+def test_more_than_5_times_the_usual_amount_needs_a_human():
     # Café usually orders 20 L. 200 L costs 312, inside its 500 limit.
     decision = decide(quote(line(units=200, covers=200.0)), mandate("cafe"), PRODUCTS, HISTORY)
-    assert decision.status == "needs_clarification"
-    assert decision.question
+    assert decision.status == "pending_approval"
     assert any("200" in r and "20" in r for r in decision.reasons)
 
 
@@ -128,31 +128,19 @@ def test_exactly_5_times_the_usual_amount_is_not_unusual():
     assert decision.status == "confirmed"
 
 
-def test_confirmed_unusual_amount_goes_to_a_human():
-    decision = decide(quote(line(units=200, covers=200.0)), mandate("cafe"), PRODUCTS, HISTORY,
-                      confirm_unusual=True)
-    assert decision.status == "pending_approval"
-    assert decision.question is None
-
-
-def test_confirm_unusual_does_not_skip_other_checks_or_auto_approve():
-    decision = decide(quote(), mandate("cafe"), PRODUCTS, HISTORY, confirm_unusual=True)
-    assert decision.status == "confirmed"
-
-
 def test_line_without_a_must_keep_tag_needs_a_human():
     products = {"464201": replace(PRODUCTS["464201"], tags=[])}
     decision = decide(quote(), mandate("hotel"), products, [])
     assert decision.status == "pending_approval"
-    assert any("FREE_FROM_LACTOSE" in r for r in decision.reasons)
+    assert any("is not lactose-free" in r and "FREE_FROM" not in r for r in decision.reasons)
 
 
 # Splitting an order into lines must not get around a limit.
 
-def test_unusual_amount_split_over_several_lines_still_asks_the_agent():
+def test_unusual_amount_split_over_several_lines_still_needs_a_human():
     three_lines = [line(units=100, covers=100.0) for _ in range(3)]
     decision = decide(quote(*three_lines), mandate("cafe"), PRODUCTS, HISTORY)
-    assert decision.status == "needs_clarification"
+    assert decision.status == "pending_approval"
     assert any("300" in r for r in decision.reasons)
 
 
@@ -209,21 +197,15 @@ def test_unlisted_allergens_are_ignored_when_mandate_allows_unknown():
     assert decision.status == "confirmed"
 
 
-# The Decisions API score can only add a question, never remove one.
+# The Decisions API score can only send an order to a person, never wave one through.
 
 AI_FLAG = "Google's Decisions API rates this order 97% likely to be unusual for this buyer."
 
 
-def test_ai_flag_alone_asks_the_agent():
+def test_ai_flag_alone_needs_a_human():
     decision = decide(quote(), mandate("cafe"), PRODUCTS, HISTORY, ai_unusual=AI_FLAG)
-    assert decision.status == "needs_clarification"
-    assert AI_FLAG in decision.reasons
-
-
-def test_ai_flag_confirmed_by_the_agent_goes_to_a_human():
-    decision = decide(quote(), mandate("cafe"), PRODUCTS, HISTORY, confirm_unusual=True,
-                      ai_unusual=AI_FLAG)
     assert decision.status == "pending_approval"
+    assert AI_FLAG in decision.reasons
 
 
 def test_ai_flag_does_not_soften_a_rejection():
@@ -303,3 +285,25 @@ def test_delivery_on_an_allowed_day_is_confirmed():
 
 def test_a_mandate_without_delivery_days_accepts_any_day():
     assert decide(quote(), mandate("cafe"), PRODUCTS, []).status == "confirmed"
+
+
+# The cut-off is checked again when the order arrives, from the time stored in the quote.
+
+NOW = datetime(2026, 11, 14, 10, 0, tzinfo=timezone.utc)
+
+
+def test_cut_off_that_passed_since_the_quote_needs_a_human():
+    closed = line(closing_time="2026-11-14T09:59:00+00:00")
+    decision = decide(quote(closed), mandate("hotel"), PRODUCTS, [], now=NOW)
+    assert decision.status == "pending_approval"
+    assert any("cut-off" in r for r in decision.reasons)
+
+
+def test_cut_off_still_ahead_is_confirmed():
+    still_open = line(closing_time="2026-11-14T10:01:00+00:00")
+    assert decide(quote(still_open), mandate("hotel"), PRODUCTS, [], now=NOW).status == "confirmed"
+
+
+def test_a_line_without_a_closing_time_is_judged_by_its_flag_alone():
+    assert decide(quote(line(closing_time=None)), mandate("hotel"), PRODUCTS, [], now=NOW).status == "confirmed"
+    assert decide(quote(), mandate("hotel"), PRODUCTS, []).status == "confirmed"

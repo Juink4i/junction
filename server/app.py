@@ -133,22 +133,19 @@ def request_quote(ctx: Context, lines: list[QuoteLineRequest], need_by: date) ->
 
 
 @mcp.tool()
-def place_order(ctx: Context, quote_id: str, mandate_token: str, rationale: str,
-                confirm_unusual: bool = False, agent_signature: str | None = None) -> dict[str, Any]:
-    """Place the order for a quote, using the buyer's signed mandate.
+def place_order(ctx: Context, quote_id: str, rationale: str,
+                agent_signature: str | None = None) -> dict[str, Any]:
+    """Place the order for one quote. The mandate shown when connecting is the one that counts.
 
-    Returns one status: confirmed, needs_clarification, pending_approval or rejected,
-    always with plain-language reasons. Calling again with the same quote_id returns the
-    same order.
+    Returns one status: confirmed, pending_approval (a person must approve; check with
+    get_approval_status) or rejected, always with plain-language reasons. Calling again with
+    the same quote_id returns the same order.
 
-    agent_signature is the agent's own signature over this order (quote_id, mandate_id,
-    confirm_unusual). It is required when the mandate names an agent key, so a copy of the
-    mandate alone cannot place orders.
+    agent_signature is the agent's own signature over this order (quote_id and mandate_id).
+    It is required when the mandate names an agent key, so a copy of the mandate alone
+    cannot place orders.
     """
-    _, refused = _connect(ctx)
-    if refused:
-        return refused
-    return service().place_order(quote_id, mandate_token, rationale, confirm_unusual, agent_signature)
+    return service().place_order(quote_id, _token(ctx) or "", rationale, agent_signature)
 
 
 @mcp.tool()

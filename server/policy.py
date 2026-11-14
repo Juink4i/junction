@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from statistics import median
 
+from catalog.names import tag_name
+
 UNUSUAL_FACTOR = 5
 PERIOD_WORDS = {"week": ("this week's", "weekly"), "month": ("this month's", "monthly")}
 WEEKDAY_NAMES = {"MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "Thursday",
@@ -24,9 +26,8 @@ def period_start(period: str, now: datetime) -> datetime:
 
 @dataclass
 class Decision:
-    status: str
+    status: str  # confirmed, pending_approval or rejected
     reasons: list[str]
-    question: str | None = None
 
 
 def eur(amount: float) -> str:
@@ -40,7 +41,7 @@ def _unknown_blocked(product, blocked: set[str]) -> list[str]:
     return sorted(blocked - listed)
 
 
-def _hard_stops(quote: dict, mandate: dict, products: dict) -> list[str]:
+def hard_stops(quote: dict, mandate: dict, products: dict) -> list[str]:
     allowed = mandate["auto_approve"].get("allowed_categories")
     rules = mandate["hard_rules"]
     blocked = {code.upper() for code in rules.get("blocked_allergens", [])}
@@ -93,7 +94,8 @@ def _unusual(quote: dict, products: dict, history: list[dict]) -> list[str]:
     return reasons
 
 
-def _needs_human(quote: dict, mandate: dict, products: dict, spent_in_period: float = 0.0) -> list[str]:
+def _needs_human(quote: dict, mandate: dict, products: dict, spent_in_period: float = 0.0,
+                 now: datetime | None = None) -> list[str]:
     limits = mandate["auto_approve"]
     rules = mandate["hard_rules"]
     must_keep = mandate.get("substitution", {}).get("must_keep", [])
@@ -120,7 +122,10 @@ def _needs_human(quote: dict, mandate: dict, products: dict, spent_in_period: fl
     days = (mandate.get("delivery") or {}).get("days")
     for line in quote["lines"]:
         product = products[line["product_id"]]
-        if line["cutoff_passed"]:
+        # The quote stores each line's cut-off, so no API call is needed to see it pass.
+        closed_since = bool(now and line.get("closing_time")
+                            and datetime.fromisoformat(line["closing_time"]) <= now)
+        if line["cutoff_passed"] or closed_since:
             reasons.append(f"The order cut-off for {line['name']} has already passed, "
                            "so on-time delivery is not certain.")
         if line["available_date"] is None:
@@ -143,37 +148,27 @@ def _needs_human(quote: dict, mandate: dict, products: dict, spent_in_period: fl
                 reasons.append(f"The product data does not say whether {line['name']} contains "
                                f"{', '.join(unknown)}, which the mandate blocks. Unknown is not "
                                "treated as safe, so a person must check it.")
-        missing_tags = [t for t in must_keep if t not in product.tags]
-        if missing_tags:
-            reasons.append(f"{line['name']} does not have the tag the mandate requires: "
-                           f"{', '.join(missing_tags)}.")
+        missing = [tag_name(t) for t in must_keep if t not in product.tags]
+        if missing:
+            reasons.append(f"{line['name']} is not {', '.join(missing)}, which the mandate requires.")
     return reasons
 
 
 def decide(quote: dict, mandate: dict, products: dict, history: list[dict],
-           confirm_unusual: bool = False, ai_unusual: str | None = None,
-           spent_in_period: float = 0.0) -> Decision:
+           ai_unusual: str | None = None, spent_in_period: float = 0.0,
+           now: datetime | None = None) -> Decision:
     """quote is a verified quote plus its need_by date; mandate is already verified.
 
-    ai_unusual is an optional reason from an outside scorer. It can only add a question.
-    spent_in_period is what the buyer's other live orders add up to in the current budget period.
+    ai_unusual is an optional reason from an outside scorer. It can only send the order to a
+    person. spent_in_period is what the buyer's other live orders add up to in the current
+    budget period. now is when the order arrived, to see a cut-off that passed since the quote.
     """
-    stops = _hard_stops(quote, mandate, products)
+    stops = hard_stops(quote, mandate, products)
     if stops:
         return Decision("rejected", stops)
 
-    unusual = _unusual(quote, products, history) + ([ai_unusual] if ai_unusual else [])
-    if unusual and not confirm_unusual:
-        return Decision(
-            "needs_clarification", unusual,
-            question="This is far more than this buyer usually orders. If the amount is right, "
-                     "place the order again with confirm_unusual = true. It will then go to a "
-                     "person for approval.",
-        )
-
-    for_human = _needs_human(quote, mandate, products, spent_in_period)
-    if unusual:
-        for_human += [f"{r} The agent confirmed the amount." for r in unusual]
+    for_human = _needs_human(quote, mandate, products, spent_in_period, now)
+    for_human += _unusual(quote, products, history) + ([ai_unusual] if ai_unusual else [])
     if for_human:
         return Decision("pending_approval", for_human)
 

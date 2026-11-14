@@ -145,11 +145,11 @@ def test_a_typo_in_a_new_mandate_part_is_refused(svc, part, value):
     assert part in body["message"]
 
 
-def test_declared_usual_orders_make_a_big_first_order_ask_for_confirmation(svc):
+def test_declared_usual_orders_make_a_big_first_order_go_to_a_person(svc):
     public_pem, token = signed()
     svc.register_buyer(public_pem, token)
     result = svc.place_order(milk(svc, 240)["quote_id"], token, "Party")  # more than 5 x 40 L
-    assert result["status"] == "needs_clarification"
+    assert result["status"] == "pending_approval"
     assert "40 L" in " ".join(result["reasons"])
 
 

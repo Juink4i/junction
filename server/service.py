@@ -18,7 +18,7 @@ from server.db import transaction
 from server.mandate import BUYER_ID, MandateError, check_mandate, verify_mandate
 from server.seller import KeywordSeller, Need, keyword_verdict
 from server.policy import decide, eur, period_start
-from server.unusual import MODEL, REASON_PREFIX, THRESHOLD, flag_reason
+from server.unusual import MODEL, THRESHOLD, flag_reason
 
 QUOTE_TTL = timedelta(minutes=15)
 CANDIDATE_LIMIT = 100  # the most products one search hands to the seller
@@ -385,8 +385,8 @@ class Service:
 
     @locked
     def place_order(self, quote_id: str, mandate_token: str, rationale: str,
-                    confirm_unusual: bool = False, agent_signature: str | None = None) -> dict:
-        return self._place_order(quote_id, mandate_token, rationale, confirm_unusual, agent_signature)
+                    agent_signature: str | None = None) -> dict:
+        return self._place_order(quote_id, mandate_token, rationale, agent_signature)
 
     def _refuse(self, quote_id: str, reason: str) -> dict:
         """A refusal that is not tied to an order, so it cannot use up someone's quote."""
@@ -398,8 +398,6 @@ class Service:
         result = {"status": order["status"], "order_id": order["order_id"]}
         if order["approval_id"]:
             result["approval_id"] = order["approval_id"]
-        if order["question"]:
-            result["question"] = order["question"]
         result["reasons"] = json.loads(order["reasons_json"])
         return result
 
@@ -407,8 +405,12 @@ class Service:
         (column, value), = where.items()
         return self.conn.execute(f"SELECT * FROM orders WHERE {column} = ?", (value,)).fetchone()
 
+    def _history(self, buyer_id: str) -> list[dict]:
+        return [dict(row) for row in self.conn.execute(
+            "SELECT category, amount, content_unit FROM order_history WHERE buyer_id = ?", (buyer_id,))]
+
     def _place_order(self, quote_id: str, mandate_token: str, rationale: str,
-                     confirm_unusual: bool, agent_signature: str | None = None) -> dict:
+                     agent_signature: str | None = None) -> dict:
         now = self.now()
         try:
             buyer_id, mandate = verify_mandate(mandate_token, self.conn, now.date())
@@ -419,7 +421,7 @@ class Service:
         actor = str(mandate["agent_id"])
         signed_by_agent = "agent_key" in mandate
         if signed_by_agent:
-            problem = signing.order_signature_problem(agent_signature, mandate, quote_id, confirm_unusual)
+            problem = signing.order_signature_problem(agent_signature, mandate, quote_id)
             if problem:
                 self._log("unknown agent", "place_order",
                           f"Asked to order quote {quote_id} for {mandate['buyer']} with a copy of its "
@@ -427,8 +429,7 @@ class Service:
                 return self._refuse(quote_id, problem)
         quote_row = self.conn.execute("SELECT * FROM quotes WHERE quote_id = ?", (quote_id,)).fetchone()
         self._log(actor, "place_order",
-                  f"Asked to order quote {quote_id} for {mandate['buyer']}"
-                  f"{' and confirmed the unusual amount' if confirm_unusual else ''}. "
+                  f"Asked to order quote {quote_id} for {mandate['buyer']}. "
                   f"{'The order is signed by the agent key named in the mandate. ' if signed_by_agent else ''}"
                   f"The agent's reason: \"{rationale[:500]}\"",
                   quote_id=quote_id if quote_row else None)
@@ -437,8 +438,7 @@ class Service:
         if existing is not None:
             if existing["buyer_id"] != buyer_id:
                 return self._refuse(quote_id, "This quote has already been used by another buyer.")
-            if not (existing["status"] == "needs_clarification" and confirm_unusual):
-                return self._order_result(existing)
+            return self._order_result(existing)
 
         if quote_row is None:
             return self._refuse(quote_id, f"There is no quote with id {quote_id}. Request a new quote.")
@@ -450,29 +450,19 @@ class Service:
 
         products = {l["product_id"]: self.catalog.get_product(l["product_id"]) for l in quote["lines"]}
         products = {pid: p for pid, p in products.items() if p is not None}
-        history = [dict(row) for row in self.conn.execute(
-            "SELECT category, amount, content_unit FROM order_history WHERE buyer_id = ?", (buyer_id,))]
-        if existing is not None:
-            # The agent is confirming an amount it was asked about. Keep the flag, don't re-score.
-            ai_unusual = next((r for r in json.loads(existing["reasons_json"])
-                               if r.startswith(REASON_PREFIX)), None)
-        else:
-            ai_unusual = self._ai_unusual(mandate["buyer"], history, quote, products, quote_id)
+        history = self._history(buyer_id)
+        ai_unusual = self._ai_unusual(mandate["buyer"], history, quote, products, quote_id)
         decision = decide({**quote, "need_by": need_by.isoformat()}, mandate, products, history,
-                          confirm_unusual, ai_unusual,
-                          self._spent_in_period(buyer_id, mandate, now, quote_id))
+                          ai_unusual, self._spent_in_period(buyer_id, mandate, now, quote_id), now)
 
-        order_id = existing["order_id"] if existing else _new_id("ord")
+        order_id = _new_id("ord")
         approval_id = _new_id("apr") if decision.status == "pending_approval" else None
         with transaction(self.conn):
             self.conn.execute(
                 "INSERT INTO orders (order_id, quote_id, buyer_id, mandate_id, status, approval_id, "
-                "question, reasons_json, rationale, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT (order_id) DO UPDATE SET status = excluded.status, "
-                "approval_id = excluded.approval_id, question = excluded.question, "
-                "reasons_json = excluded.reasons_json, rationale = excluded.rationale",
+                "reasons_json, rationale, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (order_id, quote_id, buyer_id, mandate["mandate_id"], decision.status, approval_id,
-                 decision.question, json.dumps(decision.reasons), rationale, now.isoformat()),
+                 json.dumps(decision.reasons), rationale, now.isoformat()),
             )
             if approval_id:
                 self.conn.execute(
@@ -510,7 +500,7 @@ class Service:
             self._log(MODEL, "unusual_score", "No score from Google's Decisions API. The 5 times "
                       "rule still applies on its own.", quote_id=quote_id)
             return None
-        verdict = "unusual, so the agent is asked" if score >= THRESHOLD else "not unusual"
+        verdict = "unusual, so a person is asked" if score >= THRESHOLD else "not unusual"
         self._log(MODEL, "unusual_score", f"Scored {score:.2f} that this amount is unusual for "
                   f"{buyer}: {verdict}. The 5 times rule also applies.", quote_id=quote_id)
         return flag_reason(score) if score >= THRESHOLD else None

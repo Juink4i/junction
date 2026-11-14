@@ -232,20 +232,12 @@ def test_another_buyer_cannot_take_over_or_read_an_order(svc, tokens):
     assert count(svc, "orders") == 1
 
 
-def test_unusual_amount_asks_the_agent_then_goes_to_a_human(svc, tokens):
-    quote_id = milk(svc, 200)["quote_id"]
-    asked = svc.place_order(quote_id, tokens["cafe"], "Big event")
-    assert asked["status"] == "needs_clarification"
-    assert asked["question"]
-    assert count(svc, "approvals") == 0
-
-    assert svc.place_order(quote_id, tokens["cafe"], "Big event") == asked
-
-    confirmed = svc.place_order(quote_id, tokens["cafe"], "Yes, 200 L", confirm_unusual=True)
-    assert confirmed["status"] == "pending_approval"
-    assert confirmed["order_id"] == asked["order_id"]
-    assert confirmed["approval_id"]
-    assert count(svc, "orders") == 1
+def test_unusual_amount_goes_straight_to_a_human(svc, tokens):
+    result = svc.place_order(milk(svc, 200)["quote_id"], tokens["cafe"], "Big event")
+    assert result["status"] == "pending_approval"
+    assert result["approval_id"] and "question" not in result
+    assert any("5 times" in r for r in result["reasons"])
+    assert count(svc, "approvals") == 1
 
 
 # Approvals
@@ -429,11 +421,11 @@ def scored(clock, catalog, scorer):
     return svc, issue_demo_mandates(svc.conn)
 
 
-def test_high_score_asks_the_agent_even_under_5_times_the_usual(clock, catalog):
+def test_high_score_sends_the_order_to_a_human_even_under_5_times_the_usual(clock, catalog):
     scorer = FixedScorer(0.93)
     svc, tokens = scored(clock, catalog, scorer)
     result = svc.place_order(milk(svc, 60)["quote_id"], tokens["cafe"], "Busy weekend")
-    assert result["status"] == "needs_clarification"
+    assert result["status"] == "pending_approval"
     assert any("93%" in r for r in result["reasons"])
     buyer, history, lines = scorer.calls[0]
     assert buyer == "Café Kallio"
@@ -447,7 +439,7 @@ def test_high_score_asks_the_agent_even_under_5_times_the_usual(clock, catalog):
 def test_low_score_cannot_wave_through_10_times_the_usual(clock, catalog):
     svc, tokens = scored(clock, catalog, FixedScorer(0.02))
     result = svc.place_order(milk(svc, 200)["quote_id"], tokens["cafe"], "Wedding")
-    assert result["status"] == "needs_clarification"
+    assert result["status"] == "pending_approval"
 
 
 def test_score_below_the_threshold_changes_nothing(clock, catalog):
@@ -458,16 +450,16 @@ def test_score_below_the_threshold_changes_nothing(clock, catalog):
 def test_scorer_failure_falls_back_to_the_5_times_rule(clock, catalog):
     svc, tokens = scored(clock, catalog, FixedScorer(fail=True))
     assert svc.place_order(milk(svc, 30)["quote_id"], tokens["cafe"], "Normal")["status"] == "confirmed"
-    assert svc.place_order(milk(svc, 200)["quote_id"], tokens["cafe"], "Big")["status"] == "needs_clarification"
+    assert svc.place_order(milk(svc, 200)["quote_id"], tokens["cafe"], "Big")["status"] == "pending_approval"
     score_entry = next(e for e in svc.full_log() if e["action"] == "unusual_score")
     assert "5 times" in score_entry["reason"]
 
 
-def test_scorer_is_not_asked_again_once_the_agent_confirmed(clock, catalog):
+def test_scorer_is_asked_once_per_order_even_when_the_call_is_repeated(clock, catalog):
     scorer = FixedScorer(0.95)
     svc, tokens = scored(clock, catalog, scorer)
     quote_id = milk(svc, 60)["quote_id"]
-    svc.place_order(quote_id, tokens["cafe"], "Busy weekend")
-    result = svc.place_order(quote_id, tokens["cafe"], "Yes, really", confirm_unusual=True)
-    assert result["status"] == "pending_approval"
+    first = svc.place_order(quote_id, tokens["cafe"], "Busy weekend")
+    assert svc.place_order(quote_id, tokens["cafe"], "Retry") == first
+    assert first["status"] == "pending_approval"
     assert len(scorer.calls) == 1

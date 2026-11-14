@@ -19,7 +19,7 @@ from onboarding.options import (ALLERGENS, CATEGORIES, PACK_SIZES, PERIODS, PRIO
                                 UNKNOWN_ALLERGEN_CHOICES, WEEKDAYS)
 
 RULE, PREFERENCE = "rule", "preference"
-UNUSUAL_FACTOR = 5  # the server asks about an order above this many times the usual amount
+UNUSUAL_FACTOR = 5  # an order above this many times the usual amount goes to a person
 DEFAULT_SUBSTITUTION = {"allowed": True, "max_price_increase_pct": 10}
 
 
@@ -196,8 +196,8 @@ def build(answers: dict[str, Any], buyer_id: str, today: date,
                   "An order that would pass it goes to a person.")
     for order in profile["usual_orders"]:
         say(RULE, f"An order more than {UNUSUAL_FACTOR} times the usual ({order['amount']:g} "
-                  f"{order['unit']} of {order['what']} each {order['every']}) is checked with the "
-                  "kitchen first.")
+                  f"{order['unit']} of {order['what']} each {order['every']}) needs a person's "
+                  "approval.")
     say(RULE, "A delivery after the date the goods are needed by needs a person's approval.")
     if days:
         say(RULE, f"Goods can arrive on {_and([WEEKDAYS[d] for d in days])}. "

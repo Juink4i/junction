@@ -99,8 +99,7 @@ async def test_tool_inputs_match_the_contract():
         "search_products": ({"product", "must_have", "amount", "unit"}, set()),
         "get_product": ({"product_id"}, {"product_id"}),
         "request_quote": ({"lines", "need_by"}, {"lines", "need_by"}),
-        "place_order": ({"quote_id", "mandate_token", "rationale", "confirm_unusual", "agent_signature"},
-                        {"quote_id", "mandate_token", "rationale"}),
+        "place_order": ({"quote_id", "rationale", "agent_signature"}, {"quote_id", "rationale"}),
         "get_approval_status": ({"approval_id"}, {"approval_id"}),
         "get_audit_log": ({"order_id", "quote_id"}, set()),
     }
@@ -142,7 +141,7 @@ async def test_order_approval_and_log_flow(tokens):
     async with Client(mcp) as client:
         quote = await quote_milk(client, 1000)
         order = await call(client, "place_order", quote_id=quote["quote_id"],
-                           mandate_token=tokens["hotel"], rationale="Best on-time option")
+                           rationale="Best on-time option")
         assert set(order) == {"status", "order_id", "approval_id", "reasons"}
         assert order["status"] == "pending_approval"
 
