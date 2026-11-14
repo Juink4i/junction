@@ -47,8 +47,8 @@
       <div class="frame"><iframe src="/chat" title="Agent conversation"></iframe></div>
     </section>
     <section class="panel">
-      <h2>Procurement manager's phone</h2>
-      <div class="phone"><div class="screen"><iframe src="/approvals" title="Approvals"></iframe></div></div>
+      <h2 id="phonelabel">Procurement manager's phone</h2>
+      <div class="phone"><div class="screen"><iframe id="phoneframe" src="/approvals" title="Phone"></iframe></div></div>
       <div class="scan">
         <div id="qr"></div>
         <div>Approve on your own phone (same Wi-Fi):<br><code id="phoneurl"></code></div>
@@ -66,6 +66,32 @@
       document.getElementById("phoneurl").textContent = url;
       if (window.QRCode) new QRCode(document.getElementById("qr"), { text: url, width: 84, height: 84 });
     })();
+
+    // The phone frame follows the demo: the onboarding page while a kitchen signs up,
+    // the approvals page otherwise.
+    const frame = document.getElementById("phoneframe");
+    const label = document.getElementById("phonelabel");
+    let backTimer = null;
+    function showOnPhone(path, title) {
+      clearTimeout(backTimer);
+      if (frame.getAttribute("src") !== path) frame.setAttribute("src", path);
+      label.textContent = title;
+    }
+    const showApprovals = () => showOnPhone("/approvals", "Procurement manager's phone");
+    const events = new EventSource("/api/events/stream");
+    events.onmessage = (m) => {
+      let e;
+      try { e = JSON.parse(m.data); } catch { return; }
+      if (e.kind === "scene") {
+        if (e.onboard) showOnPhone("/onboarding?preset=" + encodeURIComponent(e.onboard), "Kitchen manager's phone");
+        else showApprovals();
+      } else if (e.kind === "onboarded") {
+        clearTimeout(backTimer);
+        backTimer = setTimeout(showApprovals, 3000);
+      } else if (e.kind === "clear") {
+        showApprovals();
+      }
+    };
   </script>
 </body>
 </html>

@@ -76,3 +76,9 @@ def test_sign_up_with_the_trade_server_down_saves_nothing(tmp_path):
 def test_a_body_that_is_not_an_object_is_a_bad_request(client):
     assert client.post("/api/onboarding/preview", json=["x"]).status_code == 400
     assert client.post("/api/onboarding", content=b"not json").status_code == 400
+
+
+def test_the_stage_phone_frame_can_follow_the_scene(client):
+    page = client.get("/").text
+    assert 'id="phoneframe"' in page and 'id="phonelabel"' in page
+    assert "/onboarding?preset=" in page
