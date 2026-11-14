@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Decision log</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .wrap { max-width: 980px; }
+    .verify { position: sticky; top: 72px; z-index: 4;
+      display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 16px;
+      border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); }
+    .verify .msg { flex: 1; min-width: 220px; }
+    .verify .msg strong { display: block; font-size: 16px; }
+    .verify.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
+    .verify.bad { background: var(--bad-soft); border-color: transparent; color: var(--bad); }
+    .verify .btn { min-width: 132px; }
+    .verify.ok .btn { background: var(--ok); border-color: var(--ok); color: #fff; }
+    .verify.bad .btn { background: var(--bad); border-color: var(--bad); color: #fff; }
+    .tools { display: flex; gap: 10px; align-items: center; margin: 14px 0 8px; flex-wrap: wrap; }
+    .tools input[type="search"] { flex: 1; min-width: 180px; height: 38px; padding: 0 12px; border-radius: 10px;
+      border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; }
+    .tools label { font-size: 13px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+    .entries { list-style: none; margin: 0; padding: 0; }
+    .entry { display: grid; grid-template-columns: 44px 1fr; gap: 4px 12px; padding: 12px 14px;
+      background: var(--surface); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; }
+    .entry .seq { font-family: var(--mono); color: var(--faint); font-size: 13px; padding-top: 2px; }
+    .entry .head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .entry .action { font-weight: 650; }
+    .entry .time { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--faint); }
+    .entry .reason { grid-column: 2; font-size: 14px; }
+    .entry .chain { grid-column: 2; font-family: var(--mono); font-size: 11px; color: var(--faint);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .entry.broken { border-color: var(--bad); background: var(--bad-soft); }
+    .entry.after-broken { opacity: 0.6; border-style: dashed; border-color: var(--bad); }
+    .entry.fresh { animation: pop 0.3s ease-out; }
+    .legend { font-size: 13px; color: var(--muted); margin: 10px 2px 0; }
+  </style>
+</head>
+<body>
+  <header class="bar">
+    <div class="grow">
+      <h1>Decision log</h1>
+      <p class="sub">Every search, quote, decision and approval, in plain language. The buyer and Valio Aimo read the same log.</p>
+    </div>
+    <span id="live" class="live">connecting</span>
+  </header>
+
+  <main class="wrap">
+    <section id="verify" class="verify">
+      <div class="msg">
+        <strong id="vtitle">Is this log intact?</strong>
+        <span id="vtext">Each entry stores the hash of the entry before it. Edit one row and every later hash stops matching.</span>
+      </div>
+      <button id="vbtn" class="btn primary">Verify log</button>
+    </section>
+
+    <div class="tools">
+      <input id="filter" type="search" placeholder="Filter: order id, buyer, decision…" aria-label="Filter log">
+      <label><input id="follow" type="checkbox" checked> Auto-refresh</label>
+      <span id="total" class="faint"></span>
+    </div>
+    <div id="error" class="banner bad hidden"></div>
+    <ol id="entries" class="entries"></ol>
+    <div id="empty" class="empty hidden"><div class="big">📜</div>No entries yet.</div>
+  </main>
+
+  <script src="/static/common.js"></script>
+  <script>
+    let entries = [];
+    let lastSig = "";
+    let brokenAt = null;
+    const seen = new Set();
+
+    function actorPill(actor) {
+      const a = String(actor ?? "").toLowerCase();
+      let cls = "brand", tag = "agent";
+      if (a.includes("policy") || a.includes("server") || a.includes("auditor")) { cls = "code"; tag = "code"; }
+      else if (a.includes("approver") || a.includes("@") || a.includes("human")) { cls = "ok"; tag = "person"; }
+      return `<span class="pill ${cls}" title="${tag}">${esc(actor)}</span>`;
+    }
+
+    function actionPill(action) {
+      const a = String(action ?? "");
+      for (const [k, s] of Object.entries(STATUS)) {
+        if (a.includes(k)) return `<span class="pill ${s.cls}">${esc(a)}</span>`;
+      }
+      return `<span class="action">${esc(a)}</span>`;
+    }
+
+    function render() {
+      const q = document.getElementById("filter").value.trim().toLowerCase();
+      const shown = entries.filter((e) => !q || JSON.stringify(e).toLowerCase().includes(q)).slice().reverse();
+      const ol = document.getElementById("entries");
+      ol.innerHTML = shown.map((e) => {
+        const cls = brokenAt == null ? "" : e.seq === brokenAt ? "broken" : e.seq > brokenAt ? "after-broken" : "";
+        const fresh = seen.has(e.seq) ? "" : " fresh";
+        return `<li class="entry ${cls}${fresh}" id="e${e.seq}">
+          <span class="seq">#${esc(e.seq)}</span>
+          <div class="head">${actorPill(e.actor)} ${actionPill(e.action)}<span class="time">${clock(e.time)}</span></div>
+          <div class="reason">${esc(e.reason)}</div>
+          <div class="chain" title="prev ${esc(e.prev_hash)} → ${esc(e.hash)}">prev ${esc(String(e.prev_hash ?? "").slice(0, 12))}… → ${esc(String(e.hash ?? "").slice(0, 12))}…</div>
+        </li>`;
+      }).join("");
+      entries.forEach((e) => seen.add(e.seq));
+      document.getElementById("empty").classList.toggle("hidden", entries.length > 0);
+      document.getElementById("total").textContent = entries.length ? `${entries.length} entries` : "";
+    }
+
+    async function load() {
+      const live = document.getElementById("live");
+      try {
+        const body = await getJSON("/api/log");
+        const next = asList(body, "entries", "items", "log");
+        const sig = JSON.stringify(next);
+        if (sig !== lastSig) { lastSig = sig; entries = next; render(); }
+        live.className = "live on"; live.textContent = "live";
+        document.getElementById("error").classList.add("hidden");
+      } catch (e) {
+        live.className = "live off"; live.textContent = "offline";
+        const box = document.getElementById("error");
+        box.textContent = `Can't reach the trade server: ${e.message}`; box.classList.remove("hidden");
+      }
+    }
+
+    async function verify() {
+      const box = document.getElementById("verify"), btn = document.getElementById("vbtn");
+      btn.disabled = true; btn.innerHTML = `<span class="spinner"></span> Checking`;
+      try {
+        await load();
+        const r = await getJSON("/api/log/verify");
+        brokenAt = r.ok ? null : (r.broken_at_seq ?? null);
+        box.className = "verify " + (r.ok ? "ok" : "bad");
+        document.getElementById("vtitle").textContent = r.ok ? "✓ Log intact" : `✗ Log broken at entry #${r.broken_at_seq}`;
+        document.getElementById("vtext").textContent = r.ok
+          ? `All ${entries.length} entries checked. Every hash matches the entry before it.`
+          : `Entry #${r.broken_at_seq} was changed after it was written, so it and every later hash no longer match.`;
+        render();
+        if (!r.ok) document.getElementById("e" + r.broken_at_seq)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      } catch (e) {
+        box.className = "verify bad";
+        document.getElementById("vtitle").textContent = "Could not verify";
+        document.getElementById("vtext").textContent = e.message;
+      } finally {
+        btn.disabled = false; btn.textContent = "Verify again";
+      }
+    }
+
+    document.getElementById("vbtn").addEventListener("click", verify);
+    document.getElementById("filter").addEventListener("input", render);
+    if (new URLSearchParams(location.search).get("verify") === "1") setTimeout(verify, 300);
+    load();
+    setInterval(() => { if (document.getElementById("follow").checked) load(); }, 3000);
+  </script>
+</body>
+</html>

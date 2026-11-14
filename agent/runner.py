@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from dataclasses import dataclass, field
 from typing import Any
@@ -15,6 +16,9 @@ from agent.tools import AskFn, Toolbox
 
 APP_NAME = "valio_buyer"
 MAX_LLM_CALLS = 40
+
+# ADK's telemetry warns on every scripted-model turn; keep the demo terminal readable.
+logging.getLogger("google_adk.google.adk.telemetry").setLevel(logging.ERROR)
 
 
 @dataclass
@@ -69,7 +73,8 @@ async def run_buyer(request: str, settings: Settings, sink: EventSink,
 
     ask = ask or make_ask(settings.replies)
     sink.add_secret(settings.mandate_token)
-    sink.publish("run_start", buyer_name=settings.buyer_name, model=settings.model,
+    model_name = settings.model if isinstance(settings.model, str) else getattr(settings.model, "model", "?")
+    sink.publish("run_start", buyer_name=settings.buyer_name, model=model_name,
                  request=request, gullible=settings.gullible)
     sink.publish("user", text=request)
     result = RunResult()

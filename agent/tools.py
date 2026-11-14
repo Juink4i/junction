@@ -40,6 +40,7 @@ class OptionCard(BaseModel):
     units: int | None = Field(default=None, description="Sales units to order.")
     sales_unit: str | None = None
     covers: float | None = Field(default=None, description="Litres or kilograms the units cover.")
+    content_unit: str | None = Field(default=None, description='"L" or "KG", the unit of covers.')
     total_eur: float | None = None
     available_date: str | None = None
     trade_off: str = Field(description="One short line: what you gain and what you give up.")
