@@ -16,6 +16,7 @@ Onboarding is that missing step. A kitchen answers one page of questions, signs 
 | Who builds it | Runner 3, on branch `bot`, including the `server/` parts. The folder rule is waived for this feature only. Tell Runner 2 before starting. |
 | Form | One page with kitchen-type templates. No AI takes part in onboarding. |
 | Agent key | Included, late in the build order so it can be dropped. |
+| Enrolment code | Optional, added after review (section 6.5). Ties a registration to a customer Valio Aimo already knows. |
 | Contract B | Gains one HTTP endpoint (`POST /buyers`) and one optional `place_order` input (`agent_signature`). No existing shape changes. |
 
 Existing behaviour is protected: a mandate without the new sections is treated exactly as today. The hotel, café and school mandates and the five current scenes are not touched.
@@ -207,6 +208,21 @@ Both produce `pending_approval`. The order of checks is unchanged: hard stops, t
 - If the mandate has no `agent_key`, the input is ignored and everything works as today.
 - A successful order's log entry says it was signed by the agent key named in the mandate.
 
+### 6.5 Enrolment code (optional, added after review)
+
+The two keys prove that an order comes from whoever registered. They do not prove that the registrant is the real kitchen: without this step, anyone can register under any name.
+
+An enrolment code closes that gap for the demo. Valio Aimo shows each existing customer a code in its webshop account. The kitchen types it on the onboarding page.
+
+- The server has a `customers` table (customer number, name, enrolment code), seeded with one demo customer by `server/make_mandate.py`.
+- When the server runs with `ENROLMENT_CODES=on`, `POST /buyers` must carry a known `enrolment_code`. Otherwise it answers 403 `enrolment_code_invalid`, and logs the attempt.
+- On success the buyer's stored name is the name on Valio Aimo's record, not the name typed into the mandate. The log entry names the customer number.
+- The code is a registration credential. It is never written into the mandate or the profile.
+- A code can register more than one agent, so rehearsals can repeat. The customer would rotate it in the webshop.
+- Without the setting, the server behaves as in 6.1 and ignores the field.
+
+In production the same anchor is the webshop login, or OAuth, and later a verifiable credential tied to the business ID.
+
 ## 7. Buyer-side code
 
 ### 7.1 `onboarding/` (new package, plain code)
@@ -261,7 +277,7 @@ A new first scene, key `o`: **"1 · A new kitchen signs up"**. The current scene
 
 Keeping the demo hands-off:
 
-- With `--scripted`, the runner submits the day-care preset itself after the usual pause.
+- With `--scripted`, the runner submits the day-care preset itself, straight away.
 - Otherwise it waits up to 45 seconds for the presenter, then submits the preset itself, so the demo never stalls.
 
 The fake server (`demo/fake_server.py`) gains `POST /buyers` and remembers the registered mandate. It does not check signatures, the budget, delivery days or the agent signature. It is for rehearsals only.
@@ -307,20 +323,24 @@ Build order is priority order. Stop after any step and everything above it still
 | 7 | Docs (section 14) | 20 min |
 | 8 | Stage phone frame switches to the onboarding page | 20 min |
 | 9 | Agent key: `agent/identity.py`, signed orders, server check | 60 min |
-| 10 | Server: delivery-days rule | 30 min |
+| 10 | Enrolment code (optional, section 6.5) | 30 min |
+| 11 | Server: delivery-days rule | 30 min |
 
-About 7.5 hours in total. Steps 1 to 7 are the feature, at about 5.5 hours. Until a later step is built:
+About 8 hours in total. Steps 1 to 7 are the feature, at about 5.5 hours. Until a later step is built:
 
 - Without step 8, the onboarding page opens in its own browser tab.
 - Without step 9, an onboarded mandate has no `agent_key` and is the only credential, like the seeded ones. The page shows no "orders must be signed" sentence. The two-key chain goes on the path-to-production slide.
-- Without step 10, `build` puts delivery days in the profile and the page labels them a Preference. Step 10 moves them into the mandate and changes the label to Rule.
+- Without step 10, anyone can register a kitchen under any name.
+- Without step 11, `build` puts delivery days in the profile and the page labels them a Preference. Step 11 moves them into the mandate and changes the label to Rule.
 
-Step 2 adds the shape checks for `budget` and `usual_orders`. Steps 9 and 10 each add the shape check for their own part (`agent_key`, `delivery`).
+Step 2 adds the shape checks for `budget` and `usual_orders`. Steps 9 and 11 each add the shape check for their own part (`agent_key`, `delivery`).
+
+The task-by-task plan is in `docs/superpowers/plans/2026-11-14-buyer-onboarding.md`.
 
 ## 12. Not in this feature
 
 - Changing a mandate after sign-up, replacing a key, or revoking one.
-- Proving who the kitchen is at registration. In the demo anyone can register. In production this sits behind Valio Aimo's customer login.
+- Proving who the kitchen is beyond the optional enrolment code (section 6.5). In production this sits behind Valio Aimo's customer login.
 - Standing orders that run on a schedule. Usual orders only feed the baseline and the agent's "the usual".
 - Adding real orders to the order history.
 - AI help with filling in the form.
