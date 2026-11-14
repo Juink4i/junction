@@ -73,6 +73,7 @@ Every error is `{code, message, retryable}`.
 Runner 2 also serves plain HTTP for Runner 3's screens:
 - `GET /approvals`, `POST /approvals/{id}/approve`, `POST /approvals/{id}/reject`
 - `GET /log`, `GET /log/verify` → `{ok: bool, broken_at_seq?}`
+- `POST /buyers` with `{public_pem, mandate_token}` → 201 `{buyer_id, mandate_id, status: "registered"}`. A kitchen registers its public key and its signed mandate. HTTP only, never an MCP tool, so an agent cannot register a mandate. Added for buyer onboarding: see `docs/superpowers/specs/2026-11-14-buyer-onboarding-design.md`.
 
 ---
 
