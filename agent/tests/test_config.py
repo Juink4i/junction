@@ -3,6 +3,7 @@
 import json
 
 from agent import config
+from agent import __main__ as main_module
 from agent.__main__ import main
 
 
@@ -43,3 +44,11 @@ def test_an_unknown_buyer_stops_with_a_plain_message(tmp_path, monkeypatch, caps
     monkeypatch.setattr(config, "BUYERS_DIR", tmp_path)
     assert main(["--buyer", "nobody", "milk please"]) == 2
     assert "No buyer called 'nobody'" in capsys.readouterr().err
+
+
+def test_a_buyer_without_an_agent_key_stops_before_connecting(tmp_path, monkeypatch, capsys):
+    buyer = onboarded(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "load_gemini_key", lambda: True)
+    assert main(["--buyer", buyer, "milk please"]) == 2
+    err = capsys.readouterr().err
+    assert "no agent key" in err and "/onboarding" in err and "server.make_mandate" in err

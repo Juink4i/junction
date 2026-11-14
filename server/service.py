@@ -13,12 +13,14 @@ from typing import Any, Callable
 import jwt
 
 from server import audit, signing
+from server.agent_auth import AgentTokenError, check_session_token
 from server.db import transaction
 from server.mandate import BUYER_ID, MandateError, check_mandate, verify_mandate
 from server.policy import decide, eur, period_start
 from server.unusual import MODEL, REASON_PREFIX, THRESHOLD, flag_reason
 
 QUOTE_TTL = timedelta(minutes=15)
+OTHER_KITCHEN = "This agent may only order for the kitchen it is registered for."
 SUMMARY_FIELDS = ("id", "name_en", "name_fi", "category", "sales_unit", "tags", "labels")
 PRODUCT_FIELDS = SUMMARY_FIELDS + (
     "allergens_contains", "allergens_may_contain", "allergens_free_from", "allergen_info_missing",
@@ -134,6 +136,43 @@ class Service:
         if customer:
             body["customer_no"] = customer["customer_no"]
         return 201, body
+
+    # Who is calling: only a registered kitchen's agent may use the MCP endpoint.
+
+    @locked
+    def authenticate_agent(self, mandate_token: Any, agent_token: Any) -> dict:
+        """{buyer_id, agent_id, mandate_id} for a valid mandate plus agent session token, else an
+        error {code, message, retryable}. Every refusal is logged; no token is ever written."""
+        def refuse(code: str, message: str, reason: str) -> dict:
+            self._log("unknown agent", "connect:refused", reason)
+            return error(code, message)
+
+        if not (isinstance(mandate_token, str) and mandate_token
+                and isinstance(agent_token, str) and agent_token):
+            return refuse("agent_not_authenticated",
+                          "Send the kitchen's signed mandate in X-Mandate and the agent's session "
+                          "token in Authorization: Bearer.",
+                          "An agent tried to connect without a mandate and an agent token.")
+        now = self.now()
+        try:
+            buyer_id, mandate = verify_mandate(mandate_token, self.conn, now.date())
+        except MandateError as e:
+            return refuse("mandate_not_accepted", f"The mandate was not accepted. {e}",
+                          f"An agent tried to connect with a mandate that was not accepted: {e}")
+        if not signing.is_ed25519_public(mandate.get("agent_key")):
+            return refuse("agent_key_missing",
+                          "This mandate names no agent key, so no agent may act for this kitchen. "
+                          "The kitchen must sign a mandate that names its agent's key.",
+                          f"An agent tried to connect for {mandate['buyer']}, whose mandate "
+                          f"{mandate['mandate_id']} names no agent key.")
+        try:
+            check_session_token(agent_token, mandate, now)
+        except AgentTokenError as e:
+            return refuse("agent_token_invalid", f"The agent's session token is not valid: {e}.",
+                          f"An agent tried to connect for {mandate['buyer']} with mandate "
+                          f"{mandate['mandate_id']}, but {e}.")
+        return {"buyer_id": buyer_id, "agent_id": str(mandate["agent_id"]),
+                "mandate_id": str(mandate["mandate_id"])}
 
     # Search and details: static data only.
 
@@ -282,8 +321,12 @@ class Service:
 
     @locked
     def place_order(self, quote_id: str, mandate_token: str, rationale: str,
-                    confirm_unusual: bool = False, agent_signature: str | None = None) -> dict:
-        return self._place_order(quote_id, mandate_token, rationale, confirm_unusual, agent_signature)
+                    confirm_unusual: bool = False, agent_signature: str | None = None,
+                    caller: dict | None = None) -> dict:
+        """caller is the authenticated agent ({buyer_id, agent_id, mandate_id}) when the call
+        came over HTTP; None for in-process calls."""
+        return self._place_order(quote_id, mandate_token, rationale, confirm_unusual, agent_signature,
+                                 caller)
 
     def _refuse(self, quote_id: str, reason: str) -> dict:
         """A refusal that is not tied to an order, so it cannot use up someone's quote."""
@@ -305,14 +348,20 @@ class Service:
         return self.conn.execute(f"SELECT * FROM orders WHERE {column} = ?", (value,)).fetchone()
 
     def _place_order(self, quote_id: str, mandate_token: str, rationale: str,
-                     confirm_unusual: bool, agent_signature: str | None = None) -> dict:
+                     confirm_unusual: bool, agent_signature: str | None = None,
+                     caller: dict | None = None) -> dict:
         now = self.now()
         try:
             buyer_id, mandate = verify_mandate(mandate_token, self.conn, now.date())
         except MandateError as e:
-            self._log("unknown agent", "place_order", f"Asked to order quote {quote_id} without a "
-                      "valid mandate.")
+            self._log(caller["agent_id"] if caller else "unknown agent", "place_order",
+                      f"Asked to order quote {quote_id} without a valid mandate.")
             return self._refuse(quote_id, f"The mandate was not accepted. {e}")
+        if caller is not None and caller["buyer_id"] != buyer_id:
+            self._log(caller["agent_id"], "place_order",
+                      f"Asked to order quote {quote_id} with the mandate of {mandate['buyer']}, "
+                      "a kitchen this agent is not registered for.")
+            return self._refuse(quote_id, OTHER_KITCHEN)
         actor = str(mandate["agent_id"])
         signed_by_agent = "agent_key" in mandate
         if signed_by_agent:

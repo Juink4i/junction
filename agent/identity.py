@@ -7,6 +7,7 @@ signature says which agent may act for it.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import jwt
@@ -44,4 +45,20 @@ def sign_order(key_file: Path, mandate_token: str, quote_id: str, confirm_unusua
     mandate = jwt.decode(mandate_token, options={"verify_signature": False})
     payload = {"quote_id": quote_id, "mandate_id": mandate["mandate_id"],
                "confirm_unusual": bool(confirm_unusual)}
+    return jwt.encode(payload, key, algorithm="EdDSA", headers={"kid": mandate["agent_id"]})
+
+
+AUDIENCE = "valio-aimo-trade"  # the trade server checks this, see server/agent_auth.py
+MAX_TTL_S = 15 * 60
+
+
+def session_token(key_file: Path, mandate_token: str, now: float | None = None, ttl_s: int = 600) -> str:
+    """A short-lived token that proves this agent is calling. Sent as Authorization: Bearer on
+    every request to the trade server's /mcp, next to the mandate in X-Mandate. Never shown to
+    the model."""
+    key = serialization.load_pem_private_key(Path(key_file).read_bytes(), password=None)
+    mandate = jwt.decode(mandate_token, options={"verify_signature": False})
+    iat = int(time.time() if now is None else now)
+    payload = {"aud": AUDIENCE, "mandate_id": mandate["mandate_id"], "iat": iat,
+               "exp": iat + min(int(ttl_s), MAX_TTL_S)}
     return jwt.encode(payload, key, algorithm="EdDSA", headers={"kid": mandate["agent_id"]})

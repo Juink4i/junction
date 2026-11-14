@@ -50,12 +50,17 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     token, source = load_mandate(args.buyer, args.mandate)
     key_file = key_path(args.buyer)
+    if not key_file.exists():
+        print(f"This buyer has no agent key ({key_file}), so the trade server will refuse it. "
+              f"Sign the kitchen up at {args.web or 'http://localhost:8080'}/onboarding, or run "
+              "`uv run python -m server.make_mandate` for the demo buyers.", file=sys.stderr)
+        return 2
     settings = Settings(
         buyer=args.buyer, server_url=args.server, web_url=args.web or None,
         model=args.model or os.environ.get("AGENT_MODEL", DEFAULT_MODEL),
         mandate_token=token, mandate_source=source, approval_wait_s=args.wait,
         gullible=args.gullible, replies=args.reply, profile=load_profile(args.buyer),
-        agent_key_file=key_file if key_file.exists() else None)
+        agent_key_file=key_file)
     problem = check_model(settings.model)
     if problem:
         print(problem, file=sys.stderr)
@@ -64,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
     sink = EventSink(settings.web_url, secrets=secret_values(), buyer=settings.buyer)
     try:
         result = asyncio.run(run_buyer(args.request, settings, sink))
-    except TradeServerUnreachable as exc:
+    except TradeServerUnreachable as exc:  # includes TradeServerRefused (401, with the reason)
         print(str(exc), file=sys.stderr)
         return 3
     finally:

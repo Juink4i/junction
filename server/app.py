@@ -6,12 +6,15 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+import anyio.to_thread
 from mcp.server.mcpserver import Context, MCPServer
 from pydantic import BaseModel
 from starlette.applications import Starlette
+from starlette.datastructures import Headers
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from server.db import connect
 from server.service import Service
@@ -21,7 +24,10 @@ mcp = MCPServer(
     "valio-aimo-trade",
     instructions=(
         "Buy from Valio Aimo. Search, then request a quote, then place the order with the "
-        "buyer's signed mandate. The server decides whether an order goes through."
+        "buyer's signed mandate. The server decides whether an order goes through. "
+        "Only the agent of a registered kitchen may connect: every HTTP request carries the "
+        "kitchen's signed mandate in X-Mandate and a short session token signed with the "
+        "agent's own key in Authorization: Bearer. An agent may only order for its own kitchen."
     ),
 )
 
@@ -51,7 +57,24 @@ def use_service(replacement: Service | None) -> None:
     _service = replacement
 
 
+def _caller(ctx: Context) -> dict | None:
+    """The agent AgentAuth let in for this HTTP request: {buyer_id, agent_id, mandate_id}.
+
+    The SDK hands each tool the Starlette request that carried the call, and AgentAuth put
+    the identity in that request's scope. None for in-process calls (tests), which have no
+    HTTP request and never pass through AgentAuth."""
+    try:
+        request = ctx.request_context.request
+    except (ValueError, AttributeError):
+        return None
+    caller = getattr(getattr(request, "state", None), "agent", None)
+    return caller if isinstance(caller, dict) else None
+
+
 def _actor(ctx: Context) -> str:
+    caller = _caller(ctx)
+    if caller:
+        return caller["agent_id"]
     try:
         return ctx.session.client_params.client_info.name or "agent"
     except AttributeError:
@@ -96,7 +119,7 @@ def request_quote(ctx: Context, lines: list[QuoteLineRequest], need_by: date) ->
 
 
 @mcp.tool()
-def place_order(quote_id: str, mandate_token: str, rationale: str,
+def place_order(ctx: Context, quote_id: str, mandate_token: str, rationale: str,
                 confirm_unusual: bool = False, agent_signature: str | None = None) -> dict[str, Any]:
     """Place the order for a quote, using the buyer's signed mandate.
 
@@ -106,9 +129,10 @@ def place_order(quote_id: str, mandate_token: str, rationale: str,
 
     agent_signature is the agent's own signature over this order (quote_id, mandate_id,
     confirm_unusual). It is required when the mandate names an agent key, so a copy of the
-    mandate alone cannot place orders.
+    mandate alone cannot place orders. An agent may only order for its own kitchen.
     """
-    return service().place_order(quote_id, mandate_token, rationale, confirm_unusual, agent_signature)
+    return service().place_order(quote_id, mandate_token, rationale, confirm_unusual, agent_signature,
+                                 caller=_caller(ctx))
 
 
 @mcp.tool()
@@ -173,9 +197,45 @@ async def verify_log(request: Request) -> JSONResponse:
     return JSONResponse(service().verify_log())
 
 
+MCP_PATH = "/mcp"
+
+
+class AgentAuth:
+    """Lets only a registered kitchen's agent reach /mcp. The other routes (/approvals, /log,
+    POST /buyers) serve the screens and registration, and stay open.
+
+    On success the caller {buyer_id, agent_id, mandate_id} goes into the request scope's
+    state, where the tools read it (see _caller). On failure: 401 with {code, message,
+    retryable} and WWW-Authenticate: Bearer. Service.authenticate_agent logs every refusal."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        path = scope.get("path", "")
+        if (scope["type"] != "http" or scope.get("method") == "OPTIONS"
+                or not (path == MCP_PATH or path.startswith(MCP_PATH + "/"))):
+            await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+        authorization = headers.get("authorization", "")
+        bearer = authorization[7:].strip() if authorization[:7].lower() == "bearer " else None
+        result = await anyio.to_thread.run_sync(service().authenticate_agent,
+                                                headers.get("x-mandate"), bearer)
+        if "code" in result:
+            response = JSONResponse(result, status_code=401,
+                                    headers={"WWW-Authenticate": 'Bearer realm="valio-aimo-trade"'})
+            await response(scope, receive, send)
+            return
+        scope.setdefault("state", {})["agent"] = result
+        await self.app(scope, receive, send)
+
+
 def build_http_app() -> Starlette:
     app = mcp.streamable_http_app()
-    # The approval and log pages are served from another port.
+    app.add_middleware(AgentAuth)
+    # The approval and log pages are served from another port. CORS is added last, so it is
+    # outermost and a refused request still carries CORS headers.
     app.add_middleware(
         CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
         expose_headers=["Mcp-Session-Id"],

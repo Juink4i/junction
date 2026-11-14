@@ -2,22 +2,92 @@
 
 Every tool result comes back as plain Python data. Every failure comes back as
 {"error": {"code", "message", "retryable"}} so the agent can explain it, never as a crash.
+
+The trade server only lets a registered kitchen's agent in. Every HTTP request carries the
+kitchen's mandate (X-Mandate) and a short session token signed with the agent's own key
+(Authorization: Bearer). Both are added here, below the model, which never sees them.
 """
 
 from __future__ import annotations
 
 import json
+import time
 from contextlib import AsyncExitStack
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
+import httpx2
+import jwt
 from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import Implementation
 
+from agent.identity import session_token
+
 CLIENT_INFO = Implementation(name="valio-buyer-agent", version="0.1.0")
+REFRESH_BEFORE_S = 60  # make a new session token when the current one has less than this left
 
 
 class TradeServerUnreachable(RuntimeError):
     pass
+
+
+class TradeServerRefused(TradeServerUnreachable):
+    """The trade server answered, but would not let this agent in (401)."""
+
+
+class AgentCredentials(httpx2.Auth):
+    """Puts X-Mandate and a fresh Authorization: Bearer session token on every request.
+
+    The token lives ttl_s seconds and is renewed before it runs out, so a long run (waiting
+    for a person to approve) keeps working. on_token sees each new token, so the caller can
+    add it to the values that are scrubbed from anything printed."""
+
+    def __init__(self, mandate_token: str, key_file: Path, *, ttl_s: int = 600,
+                 clock: Callable[[], float] = time.time,
+                 on_token: Callable[[str], None] | None = None):
+        self.mandate_token = mandate_token
+        self.key_file = Path(key_file)
+        self.ttl_s = ttl_s
+        self.clock = clock
+        self.on_token = on_token
+        self._token: str | None = None
+        self._expires = 0.0
+
+    def headers(self) -> dict[str, str]:
+        now = self.clock()
+        if self._token is None or now >= self._expires - REFRESH_BEFORE_S:
+            self._token = session_token(self.key_file, self.mandate_token, now=now, ttl_s=self.ttl_s)
+            self._expires = jwt.decode(self._token, options={"verify_signature": False})["exp"]
+            if self.on_token:
+                self.on_token(self._token)
+        return {"X-Mandate": self.mandate_token, "Authorization": f"Bearer {self._token}"}
+
+    def auth_flow(self, request: httpx2.Request):
+        try:
+            request.headers.update(self.headers())
+        except Exception:  # an unreadable key or mandate: the server refuses with a plain reason
+            request.headers["X-Mandate"] = self.mandate_token
+        yield request
+
+
+class RefusalCatcher:
+    """Remembers the trade server's plain reason when it answers 401. The MCP SDK only reports
+    "Server returned an error response", which would hide why this agent was not let in."""
+
+    def __init__(self):
+        self.reason: str | None = None
+
+    async def __call__(self, response: httpx2.Response) -> None:
+        if response.status_code != 401:
+            return
+        try:
+            await response.aread()
+            body = response.json()
+            self.reason = f"{body['message']} ({body['code']})"
+        except Exception:
+            self.reason = "The trade server refused this agent (401 Unauthorized)."
 
 
 def _error(code: str, message: str, retryable: bool = False) -> dict[str, Any]:
@@ -62,19 +132,29 @@ def parse_result(result) -> Any:
 class TradeLink:
     """`async with TradeLink(url) as link: await link.call("search_products", {...})`"""
 
-    def __init__(self, url: str, *, timeout_s: float = 60):
+    def __init__(self, url: str, *, timeout_s: float = 60, mandate_token: str | None = None,
+                 agent_key_file: Path | None = None, on_token: Callable[[str], None] | None = None):
         self.url = url
         self.timeout_s = timeout_s
+        self.credentials = (AgentCredentials(mandate_token, agent_key_file, on_token=on_token)
+                            if mandate_token and agent_key_file else None)
         self._stack: AsyncExitStack | None = None
         self._client: Client | None = None
 
     async def __aenter__(self) -> "TradeLink":
         self._stack = AsyncExitStack()
+        refusal = RefusalCatcher()
         try:
-            client = Client(self.url, client_info=CLIENT_INFO, read_timeout_seconds=self.timeout_s)
+            http = await self._stack.enter_async_context(create_mcp_http_client(auth=self.credentials))
+            http.event_hooks["response"].append(refusal)
+            client = Client(streamable_http_client(self.url, http_client=http), client_info=CLIENT_INFO,
+                            read_timeout_seconds=self.timeout_s)
             self._client = await self._stack.enter_async_context(client)
         except BaseException as exc:  # connection errors arrive wrapped in exception groups
             await self._stack.aclose()
+            if refusal.reason:
+                raise TradeServerRefused(f"The trade server at {self.url} refused this agent: "
+                                         f"{refusal.reason}") from exc
             raise TradeServerUnreachable(
                 f"Cannot reach the trade server at {self.url}. Is it running? ({type(exc).__name__})"
             ) from exc

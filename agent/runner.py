@@ -101,7 +101,10 @@ async def run_buyer(request: str, settings: Settings, sink: EventSink,
     sink.publish("user", text=request)
     result = RunResult()
 
-    async with TradeLink(settings.server_url) as link:
+    # The link adds the mandate and a fresh agent session token to every HTTP request. The
+    # model never sees either; each new session token is scrubbed from anything printed.
+    async with TradeLink(settings.server_url, mandate_token=settings.mandate_token,
+                         agent_key_file=settings.agent_key_file, on_token=sink.add_secret) as link:
         toolbox = Toolbox(link, settings, sink, ask)
         sessions = InMemorySessionService()
         runner = Runner(app_name=APP_NAME, agent=build_agent(settings, toolbox), session_service=sessions)

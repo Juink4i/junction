@@ -72,6 +72,12 @@ Every error is `{code, message, retryable}`.
 
 `agent_signature` is a JWS (EdDSA) by the agent's own key over `{quote_id, mandate_id, confirm_unusual}`. It is required when the mandate has an `agent_key`, and ignored otherwise.
 
+**Authentication** (added at the user's request). Only the agent of a registered kitchen may call `/mcp`. Every HTTP request to `/mcp` carries two headers:
+- `X-Mandate: <the kitchen's signed mandate token>`. It must verify against the kitchen's registered key, be in date, and name an `agent_key`.
+- `Authorization: Bearer <agent session token>`: a JWS (EdDSA) signed by that agent key. Header `kid` = the mandate's `agent_id`. Claims: `aud: "valio-aimo-trade"`, `mandate_id` (the mandate's), `iat`, and `exp` at most 15 minutes after `iat`. Clocks may differ by 60 seconds.
+
+Anything else gets 401 `{code, message, retryable: false}` with `WWW-Authenticate: Bearer`. The codes are `agent_not_authenticated`, `mandate_not_accepted`, `agent_key_missing` and `agent_token_invalid`. Every refusal is logged as actor `unknown agent`, action `connect:refused`. Tools log the authenticated `agent_id` as the actor. `place_order` rejects a mandate of any other kitchen: "This agent may only order for the kitchen it is registered for." The plain HTTP routes below stay open.
+
 Runner 2 also serves plain HTTP for Runner 3's screens:
 - `GET /approvals`, `POST /approvals/{id}/approve`, `POST /approvals/{id}/reject`
 - `GET /log`, `GET /log/verify` → `{ok: bool, broken_at_seq?}`
