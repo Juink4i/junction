@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from statistics import median
 
-from catalog.names import tag_name
+from catalog.names import allergen_name, tag_name
 from server.claims import NO, UNKNOWN, status
 
 UNUSUAL_FACTOR = 5
@@ -13,8 +13,13 @@ WEEKDAY_NAMES = {"MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "
                  "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday"}
 
 
-def _and(words: list[str]) -> str:
-    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+def _and(words: list[str], conjunction: str = "and") -> str:
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + f" {conjunction} " + words[-1]
+
+
+def _allergens(codes: list[str], conjunction: str = "and") -> str:
+    """Allergen codes in plain words: ["AP", "AN"] -> "peanuts and tree nuts"."""
+    return _and([(allergen_name(c) or c).lower() for c in codes], conjunction)
 
 
 def period_start(period: str, now: datetime) -> datetime:
@@ -66,16 +71,17 @@ def hard_stops(quote: dict, mandate: dict, products: dict) -> list[str]:
         contains = sorted(blocked & {a.upper() for a in product.allergens_contains})
         may_contain = sorted(blocked & {a.upper() for a in product.allergens_may_contain} - set(contains))
         if contains:
-            reasons.append(f"{line['name']} contains an allergen the mandate blocks: {', '.join(contains)}.")
+            reasons.append(f"{line['name']} contains an allergen the mandate blocks: {_allergens(contains)}.")
         if may_contain:
-            reasons.append(f"{line['name']} may contain an allergen the mandate blocks: {', '.join(may_contain)}.")
+            reasons.append(f"{line['name']} may contain an allergen the mandate blocks: {_allergens(may_contain)}.")
         unknown = _unknown_blocked(product, blocked)
         if rules.get("unknown_allergens") == "reject":
             if product.allergen_info_missing:
                 reasons.append(f"{line['name']} has no allergen information, and the mandate rejects such products.")
             elif unknown:
-                reasons.append(f"Whether {line['name']} contains {', '.join(unknown)} is unknown, "
-                               "and the mandate rejects such products.")
+                reasons.append(f"The product data does not say whether {line['name']} contains "
+                               f"{_allergens(unknown, 'or')}, which the mandate blocks. The mandate "
+                               "refuses products whose allergen data does not say.")
             unproven = _must_keep(product, mandate, UNKNOWN)
             if unproven:
                 reasons.append(f"Whether {line['name']} is {', '.join(unproven)} is unknown, "
@@ -169,7 +175,7 @@ def _needs_human(quote: dict, mandate: dict, products: dict, spent_in_period: fl
                                "as safe, so a person must check it.")
             elif unknown:
                 reasons.append(f"The product data does not say whether {line['name']} contains "
-                               f"{', '.join(unknown)}, which the mandate blocks. Unknown is not "
+                               f"{_allergens(unknown, 'or')}, which the mandate blocks. Unknown is not "
                                "treated as safe, so a person must check it.")
         missing = _must_keep(product, mandate, NO)
         if missing:

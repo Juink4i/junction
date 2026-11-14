@@ -94,7 +94,7 @@ def test_blocked_allergen_is_rejected():
     pancake = line("460000", units=5, covers=10.0, unit_price=9.8, content_unit="KG")
     decision = decide(quote(pancake), mandate("school"), PRODUCTS, [])
     assert decision.status == "rejected"
-    assert any("AE" in r for r in decision.reasons)
+    assert "Pancake 2 kg contains an allergen the mandate blocks: eggs." in decision.reasons
 
 
 def test_blocked_allergen_wins_over_reasons_for_approval():
@@ -177,7 +177,8 @@ def test_blocked_allergen_the_product_says_nothing_about_needs_a_human():
     products = milk_listing_only(["BM"], free_from=["AP"])
     decision = decide(quote(), mandate("school"), products, [])
     assert decision.status == "pending_approval"
-    assert any("AE, AN" in r and "unknown" in r.lower() for r in decision.reasons)
+    assert any("eggs or tree nuts" in r and "unknown" in r.lower() for r in decision.reasons)
+    assert not any("AE" in r or "AN" in r for r in decision.reasons)
 
 
 def test_blocked_allergens_all_listed_as_free_from_is_confirmed():
@@ -189,6 +190,8 @@ def test_blocked_allergen_the_product_says_nothing_about_is_rejected_when_mandat
     products = milk_listing_only(["BM"])
     decision = decide(quote(), mandate("school", unknown_allergens="reject"), products, [])
     assert decision.status == "rejected"
+    assert any("does not say whether" in r and "peanuts" in r and "tree nuts" in r and "AP" not in r
+               for r in decision.reasons)
 
 
 def test_unlisted_allergens_are_ignored_when_mandate_allows_unknown():

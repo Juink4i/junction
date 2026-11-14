@@ -103,7 +103,7 @@ def test_products_the_mandate_rejects_are_never_offered(svc, school):
     assert first_products(result) == ["460004"]  # no allergen information: a person decides
     assert result["options"][0]["expected"]["status"] == "pending_approval"
     (left_out,) = result["not_offered"]
-    assert left_out["product_id"] == "460000" and "AE" in left_out["reason"]
+    assert left_out["product_id"] == "460000" and "eggs" in left_out["reason"]
 
 
 def test_what_cannot_be_priced_or_measured_is_left_out_with_a_reason(svc, school, catalog):
