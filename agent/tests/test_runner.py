@@ -57,3 +57,58 @@ async def test_hotel_order_goes_to_a_person_and_is_approved(fake):
     for kind in ("run_start", "user", "request", "tool_call", "tool_result", "decision", "waiting",
                  "agent", "run_end"):
         assert kind in kinds, kind
+
+
+# The step budget: a run may make so many model calls since the buyer last said something.
+
+def _search(_):
+    return ("call", "search_products", {"text": "coffee"})
+
+
+def _searches(events):
+    return sum(1 for e in events if e["kind"] == "tool_call" and e["tool"] == "search_products")
+
+
+async def test_a_run_stops_gently_when_the_step_budget_is_used(fake):
+    script = ScriptedLlm(steps=[_search] * 10 + [lambda _: ("text", "never reached")])
+    settings = Settings(server_url=fake.mcp_url, web_url=None, model=script,
+                        mandate_token="demo-cafe", steps_per_input=5)
+    sink = EventSink(None, console=False)
+
+    result = await run_buyer("Philippine coffee beans", settings, sink, make_ask([], interactive=False))
+
+    assert result.error is None  # a plain stop, not an ADK error
+    assert _searches(sink.history) == 5
+    assert "5 steps" in result.summary and "No order was placed" in result.summary
+    assert sink.history[-1]["kind"] == "run_end"
+
+
+async def test_each_buyer_answer_gives_the_agent_a_fresh_step_budget(fake):
+    script = ScriptedLlm(steps=[_search, _search, _search,
+                                lambda _: ("call", "ask_buyer", {"question": "Which origin?"}),
+                                _search, _search, _search,
+                                lambda _: ("text", "Found Brazilian beans.")])
+    settings = Settings(server_url=fake.mcp_url, web_url=None, model=script,
+                        mandate_token="demo-cafe", steps_per_input=4)
+    sink = EventSink(None, console=False)
+
+    result = await run_buyer("coffee beans", settings, sink, make_ask(["brazil"], interactive=False))
+
+    # Without the reset the 5th model call would be over budget.
+    assert result.error is None
+    assert _searches(sink.history) == 6
+    assert result.summary == "Found Brazilian beans."
+
+
+async def test_no_answer_does_not_reset_the_step_budget(fake):
+    script = ScriptedLlm(steps=[_search, _search,
+                                lambda _: ("call", "ask_buyer", {"question": "Which origin?"}),
+                                _search, _search, _search, lambda _: ("text", "never reached")])
+    settings = Settings(server_url=fake.mcp_url, web_url=None, model=script,
+                        mandate_token="demo-cafe", steps_per_input=4)
+    sink = EventSink(None, console=False)
+
+    result = await run_buyer("coffee beans", settings, sink, make_ask([], interactive=False))
+
+    assert _searches(sink.history) == 3
+    assert "4 steps" in result.summary

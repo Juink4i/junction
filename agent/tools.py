@@ -55,6 +55,27 @@ def _err(code: str, message: str) -> dict[str, Any]:
     return {"error": {"code": code, "message": message, "retryable": False}}
 
 
+class StepBudget:
+    """How many model calls the agent may still make before the buyer says something again.
+
+    Each buyer answer starts it over, so a conversation can go on as long as the buyer is in
+    it, while an agent searching on its own cannot loop forever."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.used = 0
+
+    def take(self) -> bool:
+        """Use one step. False when none are left."""
+        if self.used >= self.limit:
+            return False
+        self.used += 1
+        return True
+
+    def reset(self) -> None:
+        self.used = 0
+
+
 class Toolbox:
     def __init__(self, link: TradeLink | None, settings: Settings, sink: EventSink, ask: AskFn):
         self.link = link
@@ -65,6 +86,7 @@ class Toolbox:
         self.quotes: list[dict[str, Any]] = []
         self.orders: list[dict[str, Any]] = []
         self.outcome: str | None = None  # last order: confirmed, pending_approval, approved, ...
+        self.budget = StepBudget(settings.steps_per_input)
 
     async def _call(self, tool: str, args: dict[str, Any], shown: dict[str, Any] | None = None) -> Any:
         call_id = uuid.uuid4().hex[:8]
@@ -73,6 +95,22 @@ class Toolbox:
         self.sink.publish("tool_result", tool=tool, call_id=call_id, result=result,
                           ok=not (isinstance(result, dict) and "error" in result))
         return result
+
+    async def before_model(self, _ctx: Any, _request: Any) -> Any:
+        """ADK calls this before each model call. Over budget, it answers instead of the model
+        with a plain stop, which ends the run cleanly."""
+        if self.budget.take():
+            return None
+        from google.adk.models import LlmResponse
+        from google.genai import types
+
+        done = ("No order was placed." if not self.orders else
+                f"The last order is {self.orders[-1].get('status', 'unknown')}; nothing more was done.")
+        text = (f"I have used {self.budget.limit} steps since your last message without finishing, "
+                f"so I am stopping here instead of searching on. {done} Tell me more precisely "
+                "what you need (for example a product name), and I will try again.")
+        return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=text)]),
+                           turn_complete=True)
 
     def functions(self) -> list[Callable[..., Awaitable[dict[str, Any]]]]:
         box = self
@@ -236,6 +274,7 @@ class Toolbox:
                 return {"answered": False,
                         "answer": "The buyer did not answer. Do not go ahead; summarise and stop."}
             box.sink.publish("answer", text=answer)
+            box.budget.reset()  # the buyer is still here: a fresh step budget
             return {"answered": True, "answer": answer}
 
         async def get_audit_log(order_id: str | None = None, quote_id: str | None = None) -> dict:

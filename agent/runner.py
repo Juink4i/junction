@@ -15,7 +15,9 @@ from agent.mcp_link import TradeLink
 from agent.tools import AskFn, Toolbox
 
 APP_NAME = "valio_buyer"
-MAX_LLM_CALLS = 40
+# The real limit is Settings.steps_per_input, counted since the buyer's last answer (see
+# Toolbox.before_model). This is only ADK's backstop for a whole run.
+MAX_LLM_CALLS = 400
 
 # ADK's telemetry warns on every scripted-model turn; keep the demo terminal readable.
 logging.getLogger("google_adk.google.adk.telemetry").setLevel(logging.ERROR)
@@ -80,6 +82,7 @@ def build_agent(settings: Settings, toolbox: Toolbox):
         model=settings.model,
         instruction=lambda _ctx: instruction,  # a function, so ADK does not template {braces}
         tools=toolbox.functions(),
+        before_model_callback=toolbox.before_model,
         generate_content_config=types.GenerateContentConfig(
             temperature=0.2, http_options=types.HttpOptions(retry_options=retry)),
     )
