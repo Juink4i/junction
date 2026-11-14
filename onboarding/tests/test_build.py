@@ -1,0 +1,147 @@
+"""Each onboarding answer lands in the mandate (a rule) or in the profile (a preference)."""
+
+import re
+from datetime import date
+
+import pytest
+
+from onboarding.build import build, new_buyer_id, problems
+from onboarding.options import TEMPLATES, options, template
+from server.mandate import _shape_problems
+
+TODAY = date(2026, 11, 14)
+
+
+def built(answers=None, **kw):
+    return build(answers or template("daycare"), "aurinko-3f2a", TODAY, **kw)
+
+
+def texts(result, kind):
+    return [s["text"] for s in result.sentences if s["kind"] == kind]
+
+
+def test_kitchen_name_approver_and_ids_go_into_the_mandate():
+    mandate = built().mandate
+    assert mandate["buyer"] == "Päiväkoti Aurinko"
+    assert mandate["approvers"] == ["kitchen.lead@aurinko.example"]
+    assert mandate["mandate_id"] == "mnd_aurinko-3f2a_001"
+    assert mandate["agent_id"] == "agent-aurinko-3f2a"
+    assert mandate["valid_until"] == "2027-11-14"
+
+
+def test_allergen_answers_become_hard_rules():
+    assert built().mandate["hard_rules"] == {
+        "blocked_allergens": ["AP", "AN"], "unknown_allergens": "human",
+        "no_delivery_after": "need_by_date"}
+
+
+def test_every_product_must_be_becomes_must_keep():
+    assert built().mandate["substitution"] == {
+        "allowed": True, "max_price_increase_pct": 10, "must_keep": ["FREE_FROM_LACTOSE"]}
+
+
+def test_categories_are_limited_only_when_some_are_chosen():
+    assert built().mandate["auto_approve"]["allowed_categories"] == ["10400"]
+    assert "allowed_categories" not in built(template("school")).mandate["auto_approve"]
+
+
+def test_per_order_amount_becomes_max_order_eur():
+    assert built().mandate["auto_approve"]["max_order_eur"] == 100
+
+
+def test_budget_becomes_a_mandate_part_or_is_left_out():
+    assert built().mandate["budget"] == {"period": "week", "max_eur": 150}
+    answers = template("daycare")
+    answers["money"]["budget"] = None
+    assert "budget" not in built(answers).mandate
+
+
+def test_usual_orders_go_to_the_mandate_and_the_profile():
+    result = built()
+    assert result.mandate["usual_orders"] == [
+        {"category": "10400", "amount": 40, "content_unit": "L", "every": "week"}]
+    assert result.profile["usual_orders"] == [
+        {"what": "lactose-free milk", "amount": 40, "unit": "L", "every": "week"}]
+
+
+def test_preferences_stay_out_of_the_mandate():
+    result = built()
+    assert "priorities" not in result.mandate and "pack_size" not in result.mandate
+    assert result.profile["priorities"] == ["price", "reliability", "finnish", "sustainability"]
+    assert result.profile["pack_size"] == "small"
+
+
+def test_the_profile_holds_no_rule():
+    assert set(built().profile) == {"buyer_id", "name", "kitchen_type", "priorities", "pack_size",
+                                    "delivery_days", "usual_orders"}
+
+
+def test_delivery_days_are_a_preference_until_the_server_enforces_them():
+    result = built()
+    assert "delivery" not in result.mandate
+    assert result.profile["delivery_days"] == ["MON", "THU"]
+    assert "Prefer deliveries on Monday and Thursday." in texts(result, "preference")
+    assert options()["delivery_days_side"] == "preference"
+
+
+def test_agent_key_is_in_the_mandate_only_when_given():
+    assert "agent_key" not in built().mandate
+    result = built(agent_public_pem="PEM")
+    assert result.mandate["agent_key"] == "PEM"
+    assert any("signed by this kitchen's agent" in t for t in texts(result, "rule"))
+
+
+def test_review_sentences_are_labelled_rule_or_preference():
+    result = built()
+    rules, preferences = texts(result, "rule"), texts(result, "preference")
+    assert "Never deliver products that contain or may contain: Peanuts, Tree nuts." in rules
+    assert "If a product does not say whether it has those allergens, a person must check it." in rules
+    assert ("The agent may spend up to €100 on one order by itself. Above that, a person approves."
+            in rules)
+    assert ("Spending is capped at €150 per week. An order that would pass it goes to a person."
+            in rules)
+    assert any("5 times the usual (40 L of lactose-free milk each week)" in r for r in rules)
+    assert ("When several products fit, prefer the lowest price, then reliable delivery, then "
+            "Finnish origin, then sustainability.") in preferences
+    assert "Prefer small packs." in preferences
+    assert {s["kind"] for s in result.sentences} == {"rule", "preference"}
+
+
+@pytest.mark.parametrize("kind", sorted(TEMPLATES))
+def test_every_template_can_be_signed_and_passes_the_servers_shape_check(kind):
+    assert problems(template(kind)) == []
+    assert _shape_problems(build(template(kind), "k-0000", TODAY).mandate) == []
+
+
+def test_template_returns_a_fresh_copy():
+    template("daycare")["kitchen"]["name"] = "changed"
+    assert template("daycare")["kitchen"]["name"] == "Päiväkoti Aurinko"
+
+
+@pytest.mark.parametrize("change, fragment", [
+    (lambda a: a["kitchen"].update(name=" "), "name"),
+    (lambda a: a["kitchen"].update(approver=""), "approves"),
+    (lambda a: a["money"].update(max_order_eur="lots"), "one order"),
+    (lambda a: a["money"]["budget"].update(max_eur=0), "above zero"),
+    (lambda a: a["money"]["budget"].update(max_eur=50), "smaller"),
+    (lambda a: a["money"]["budget"].update(period="year"), "per week or per month"),
+    (lambda a: a["money"].update(priorities=["price", "price", "finnish", "sustainability"]), "priorities"),
+    (lambda a: a["safety"].update(blocked_allergens=["ZZ"]), "ZZ"),
+    (lambda a: a["safety"].update(unknown_allergens="allow"), "allergen information"),
+    (lambda a: a["safety"].update(must_be=["KETO"]), "KETO"),
+    (lambda a: a["money"].update(allowed_categories=["99999"]), "99999"),
+    (lambda a: a["delivery"].update(days=["FUNDAY"]), "FUNDAY"),
+    (lambda a: a["usual_orders"][0].update(amount=0), "amount above zero"),
+    (lambda a: a["usual_orders"][0].update(category="10401"), "may not buy"),
+])
+def test_each_problem_is_reported_in_plain_language(change, fragment):
+    answers = template("daycare")
+    change(answers)
+    assert any(fragment in problem for problem in problems(answers))
+    with pytest.raises(ValueError):
+        build(answers, "k-0000", TODAY)
+
+
+def test_buyer_id_is_a_slug_plus_four_hex_characters():
+    assert re.fullmatch(r"paivakoti-aurinko-[0-9a-f]{4}", new_buyer_id("Päiväkoti Aurinko"))
+    assert re.fullmatch(r"kitchen-[0-9a-f]{4}", new_buyer_id("!!!"))
