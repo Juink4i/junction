@@ -22,6 +22,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import jwt
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, Field
@@ -162,12 +163,14 @@ class State:
     quotes: dict[str, dict[str, Any]] = field(default_factory=dict)
     orders: dict[str, dict[str, Any]] = field(default_factory=dict)  # by quote_id
     approvals: dict[str, dict[str, Any]] = field(default_factory=dict)
+    buyers: dict[str, dict[str, Any]] = field(default_factory=dict)  # signed up through POST /buyers
     log: list[dict[str, Any]] = field(default_factory=list)
     lock: threading.RLock = field(default_factory=threading.RLock)
 
     def reset(self) -> None:
         with self.lock:
             self.quotes.clear(), self.orders.clear(), self.approvals.clear(), self.log.clear()
+            self.buyers.clear()
 
 
 STATE = State()
@@ -319,17 +322,18 @@ def request_quote(lines: list[QuoteLineIn], need_by: date) -> dict[str, Any]:
 
 
 def _mandate_for(token: str) -> dict[str, Any] | None:
-    """Demo tokens, or a real mandate from server/make_mandate.py mapped by its "kid" (buyer id).
+    """Demo tokens, a kitchen signed up through POST /buyers, or a real mandate from
+    server/make_mandate.py mapped by its "kid" (buyer id).
 
     The fake does NOT verify signatures. The real server does.
     """
     if token in MANDATES:
         return MANDATES[token]
     try:
-        import jwt
-        return MANDATES.get(f"demo-{jwt.get_unverified_header(token).get('kid')}")
+        kid = jwt.get_unverified_header(token).get("kid")
     except Exception:
         return None
+    return STATE.buyers.get(kid) or MANDATES.get(f"demo-{kid}")
 
 
 def _decide(quote: dict[str, Any], m: dict[str, Any], confirm_unusual: bool) -> tuple[str, list[str]]:
@@ -431,6 +435,36 @@ def get_audit_log(order_id: str | None = None, quote_id: str | None = None) -> l
 
 
 # --- HTTP for the screens -------------------------------------------------------------
+
+@mcp.custom_route("/buyers", methods=["POST"])
+async def http_register_buyer(request: Request) -> JSONResponse:
+    """Fake registration. It does NOT check the signature; the real server does."""
+    try:
+        token = (await request.json())["mandate_token"]
+        buyer_id = jwt.get_unverified_header(token)["kid"]
+        m = jwt.decode(token, options={"verify_signature": False})
+        usual = m.get("usual_orders") or []
+        mine = dict(
+            key=buyer_id, buyer=m["buyer"], agent_id=m["agent_id"],
+            max_order_eur=m["auto_approve"]["max_order_eur"],
+            allowed_categories=(m["auto_approve"].get("allowed_categories")
+                                or sorted({p["category"] for p in PRODUCTS.values()})),
+            blocked_allergens=[],  # this fake's products use their own allergen words
+            unknown_allergens=m["hard_rules"].get("unknown_allergens", "human"),
+            usual_amount=usual[0]["amount"] if usual else 10 ** 9,
+            approver=(m.get("approvers") or ["approver"])[0])
+    except Exception:
+        return JSONResponse({"code": "mandate_invalid", "retryable": False,
+                             "message": "Send public_pem and a signed mandate_token."}, 400)
+    with STATE.lock:
+        if buyer_id in STATE.buyers:
+            return JSONResponse({"code": "buyer_exists", "retryable": False,
+                                 "message": f"A buyer with id {buyer_id} is already registered."}, 409)
+        STATE.buyers[buyer_id] = mine
+    log(m["buyer"], "register_buyer",
+        f"{m['buyer']} registered its signing key and mandate {m['mandate_id']} as buyer {buyer_id}.")
+    return JSONResponse({"buyer_id": buyer_id, "mandate_id": m["mandate_id"], "status": "registered"}, 201)
+
 
 @mcp.custom_route("/approvals", methods=["GET"])
 async def http_approvals(_: Request) -> JSONResponse:

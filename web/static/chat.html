@@ -64,6 +64,10 @@
     .verify.ok { background: var(--ok-soft); color: var(--ok); }
     .verify.bad { background: var(--bad-soft); color: var(--bad); }
     .note { font-size: 13px; color: var(--muted); text-align: center; }
+    .onboarded ul { list-style: none; margin: 0; padding: 0; }
+    .onboarded li { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; border-top: 1px solid var(--line); font-size: 14px; }
+    .onboarded li:first-child { border-top: 0; }
+    .onboarded .pill { flex: none; }
     #jump { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); }
   </style>
 </head>
@@ -207,6 +211,13 @@
         add(div(`verify ${e.ok ? "ok" : "bad"}`, e.ok
           ? `🔒 Verify log: intact. ${e.count ? esc(e.count) + " entries, " : ""}every hash matches.`
           : `Verify log: broken at entry #${esc(e.broken_at_seq)}.`));
+      },
+      onboarded(e) {
+        const rows = (e.sentences ?? []).map((s) => {
+          const rule = s.kind === "rule";
+          return `<li><span class="pill ${rule ? "code" : "brand"}">${rule ? "Rule" : "Preference"}</span><span>${esc(s.text)}</span></li>`;
+        }).join("");
+        add(div("request onboarded", `<h4>${esc(e.buyer_name)} signed its mandate · rules for the server, preferences for its agent</h4><ul>${rows}</ul>`));
       },
       note(e) { add(div("note", esc(e.text))); },
       run_end(e) { if (e.error) add(div("note", "The agent stopped: " + esc(e.error))); },

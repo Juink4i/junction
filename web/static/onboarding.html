@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Set up your kitchen</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .wrap { max-width: 560px; padding-bottom: 96px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip { position: relative; display: inline-flex; align-items: center; min-height: 36px; padding: 0 12px;
+      border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+      font-weight: 600; font-size: 13.5px; cursor: pointer; user-select: none; }
+    .chip input { position: absolute; opacity: 0; pointer-events: none; }
+    .chip:has(input:checked), .chip.on { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+    .card h2 { margin: 0 0 4px; font-size: 16px; }
+    .field { margin-top: 14px; }
+    .lab { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; font-weight: 600;
+      color: var(--muted); margin-bottom: 6px; }
+    input[type=text], input[type=number], select { width: 100%; min-height: 40px; padding: 0 10px;
+      border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; }
+    .inline { display: flex; gap: 8px; align-items: center; }
+    .inline > * { flex: 1; min-width: 0; }
+    .inline > .btn { flex: none; }
+    .rank { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+    .rank .n { width: 18px; color: var(--faint); font-weight: 700; }
+    .rank .what { flex: 1; }
+    .small { min-height: 32px; padding: 0 10px; font-size: 13px; }
+    .usual { border-top: 1px solid var(--line); padding: 10px 0; }
+    .usual .inline > input[type=number], .usual .inline > select[data-f=unit] { flex: 0 0 56px; padding: 0 6px; }
+    .sentences { list-style: none; margin: 0; padding: 0; }
+    .sentences li { display: flex; gap: 8px; align-items: flex-start; padding: 7px 0;
+      border-top: 1px solid var(--line); font-size: 14px; }
+    .sentences li:first-child { border-top: 0; }
+    .sentences .pill { flex: none; margin-top: 1px; }
+    .signbar { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 16px; border-top: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(8px); }
+    .signbar .btn { display: flex; width: 100%; max-width: 528px; margin: 0 auto; }
+  </style>
+</head>
+<body>
+  <header class="bar">
+    <div class="grow">
+      <h1>Set up your kitchen</h1>
+      <p class="sub">Each answer becomes a <span class="pill code">Rule</span> the server enforces, or a
+        <span class="pill brand">Preference</span> for your agent.</p>
+    </div>
+  </header>
+  <main class="wrap stack">
+    <div id="types" class="chips"></div>
+    <form id="form" class="stack" onsubmit="return false"></form>
+    <section id="review" class="card">
+      <h2>What you are signing</h2>
+      <div id="problems" class="banner bad hidden"></div>
+      <ul id="sentences" class="sentences"></ul>
+    </section>
+    <section id="done" class="card hidden"></section>
+  </main>
+  <div id="signbar" class="signbar"><button id="sign" class="btn primary" disabled>Sign and register</button></div>
+
+  <script src="/static/common.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const post = (body) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    let opts = null, answers = null, timer = null;
+
+    const pill = (side) => side === "rule"
+      ? '<span class="pill code">Rule</span>' : '<span class="pill brand">Preference</span>';
+
+    const chips = (name, items, chosen, type = "checkbox") => '<div class="chips">' + items.map((i) =>
+      `<label class="chip"><input type="${type}" name="${name}" value="${esc(i.code)}"${chosen.includes(i.code) ? " checked" : ""}>${esc(i.name)}</label>`
+    ).join("") + "</div>";
+
+    const picks = (items, chosen) => items.map((i) =>
+      `<option value="${esc(i.code)}"${i.code === chosen ? " selected" : ""}>${esc(i.name)}</option>`).join("");
+
+    const sentenceList = (sentences) => sentences.map((s) =>
+      `<li>${pill(s.kind)}<span>${esc(s.text)}</span></li>`).join("");
+
+    function renderForm() {
+      const a = answers;
+      const perPeriod = opts.periods.map((p) => ({ code: p.code, name: "per " + p.name }));
+      $("form").innerHTML = `
+        <section class="card"><h2>Your kitchen</h2>
+          <div class="field"><label class="lab" for="name">Kitchen name ${pill("rule")}</label>
+            <input type="text" id="name" value="${esc(a.kitchen.name)}"></div>
+          <div class="field"><label class="lab" for="approver">Who approves what the agent may not order alone ${pill("rule")}</label>
+            <input type="text" id="approver" value="${esc(a.kitchen.approver)}"></div>
+        </section>
+        <section class="card"><h2>Food safety</h2>
+          <div class="field"><div class="lab">Allergens that must never arrive ${pill("rule")}</div>
+            ${chips("allergen", opts.allergens, a.safety.blocked_allergens)}</div>
+          <div class="field"><div class="lab">When a product has no allergen information ${pill("rule")}</div>
+            ${chips("unknown", opts.unknown_allergens, [a.safety.unknown_allergens], "radio")}</div>
+          <div class="field"><div class="lab">Every product must be ${pill("rule")}</div>
+            ${chips("must_be", opts.tags, a.safety.must_be)}</div>
+        </section>
+        <section class="card"><h2>Money</h2>
+          <div class="field"><div class="lab">What the agent may buy. None ticked means anything. ${pill("rule")}</div>
+            ${chips("category", opts.categories, a.money.allowed_categories)}</div>
+          <div class="field"><label class="lab" for="max_order">The agent may spend alone, per order, in euros ${pill("rule")}</label>
+            <input type="number" id="max_order" min="0" step="10" value="${esc(a.money.max_order_eur)}"></div>
+          <div class="field"><div class="lab">Budget in euros. Leave empty for none. ${pill("rule")}</div>
+            <div class="inline">
+              <input type="number" id="budget" min="0" step="10" value="${esc(a.money.budget ? a.money.budget.max_eur : "")}">
+              <select id="budget_period">${picks(perPeriod, a.money.budget ? a.money.budget.period : "week")}</select>
+            </div></div>
+          <div class="field"><div class="lab">What matters most, in order ${pill("preference")}</div><div id="ranks"></div></div>
+        </section>
+        <section class="card"><h2>Delivery and rhythm</h2>
+          <div class="field"><div class="lab">Days you can receive goods. None ticked means any day. ${pill(opts.delivery_days_side)}</div>
+            ${chips("day", opts.weekdays, a.delivery.days)}</div>
+          <div class="field"><div class="lab">Pack size ${pill("preference")}</div>
+            ${chips("pack", opts.pack_sizes, [a.delivery.pack_size], "radio")}</div>
+          <div class="field"><div class="lab">Usual orders: what, how much, how often ${pill("rule")}</div>
+            <div id="usual"></div>
+            <button type="button" class="btn small" id="add_usual">Add a usual order</button></div>
+        </section>`;
+      renderRanks();
+      renderUsual();
+    }
+
+    function renderRanks() {
+      const names = Object.fromEntries(opts.priorities.map((p) => [p.code, p.name]));
+      $("ranks").innerHTML = answers.money.priorities.map((code, i) =>
+        `<div class="rank"><span class="n">${i + 1}</span><span class="what">${esc(names[code] ?? code)}</span>
+          <button type="button" class="btn small" data-up="${i}"${i === 0 ? " disabled" : ""}>Move up</button></div>`).join("");
+    }
+
+    function renderUsual() {
+      const units = [{ code: "L", name: "L" }, { code: "KG", name: "KG" }];
+      const every = opts.periods.map((p) => ({ code: p.code, name: "every " + p.name }));
+      $("usual").innerHTML = answers.usual_orders.map((o, i) => `
+        <div class="usual" data-row="${i}">
+          <div class="inline">
+            <input type="text" data-f="what" value="${esc(o.what)}" placeholder="What, for example milk">
+            <select data-f="category">${picks(opts.categories, o.category)}</select>
+          </div>
+          <div class="inline" style="margin-top: 8px">
+            <input type="number" data-f="amount" min="0" value="${esc(o.amount)}">
+            <select data-f="unit">${picks(units, o.unit)}</select>
+            <select data-f="every">${picks(every, o.every)}</select>
+            <button type="button" class="btn small" data-remove="${i}">Remove</button>
+          </div>
+        </div>`).join("");
+    }
+
+    const checked = (name) => [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((el) => el.value);
+    const numberOrNull = (text) => text === "" ? null : Number(text);
+
+    // Read the form back into `answers`. Priorities live in `answers` already.
+    function collect() {
+      const a = answers;
+      a.kitchen.name = $("name").value;
+      a.kitchen.approver = $("approver").value;
+      a.safety.blocked_allergens = checked("allergen");
+      a.safety.unknown_allergens = checked("unknown")[0] ?? "human";
+      a.safety.must_be = checked("must_be");
+      a.money.allowed_categories = checked("category");
+      a.money.max_order_eur = numberOrNull($("max_order").value);
+      const budget = numberOrNull($("budget").value);
+      a.money.budget = budget === null ? null : { period: $("budget_period").value, max_eur: budget };
+      a.delivery.days = checked("day");
+      a.delivery.pack_size = checked("pack")[0] ?? "small";
+      a.usual_orders = [...document.querySelectorAll("#usual [data-row]")].map((row) => {
+        const f = (key) => row.querySelector(`[data-f="${key}"]`).value;
+        return { what: f("what"), category: f("category"), amount: numberOrNull(f("amount")), unit: f("unit"), every: f("every") };
+      });
+    }
+
+    async function preview() {
+      collect();
+      let body;
+      try { body = await getJSON("/api/onboarding/preview", post(answers)); }
+      catch (err) { body = { problems: [err.message], sentences: [] }; }
+      $("problems").classList.toggle("hidden", body.problems.length === 0);
+      $("problems").innerHTML = body.problems.map((p) => `<div>${esc(p)}</div>`).join("");
+      $("sentences").innerHTML = sentenceList(body.sentences);
+      $("sign").disabled = body.problems.length > 0;
+    }
+
+    const previewSoon = () => { clearTimeout(timer); timer = setTimeout(preview, 250); };
+
+    async function sign() {
+      collect();
+      const button = $("sign");
+      button.disabled = true;
+      button.innerHTML = '<span class="spinner"></span> Signing';
+      try {
+        const out = await getJSON("/api/onboarding", post(answers));
+        for (const id of ["types", "form", "review", "signbar"]) $(id).classList.add("hidden");
+        $("done").classList.remove("hidden");
+        $("done").innerHTML = `<h2>Signed and registered</h2>
+          <p><strong>${esc(out.name)}</strong> is now a buyer at Valio Aimo. Its agent can order straight away, inside these rules.</p>
+          <p class="muted">Buyer id <code class="mono">${esc(out.buyer_id)}</code></p>
+          <ul class="sentences">${sentenceList(out.sentences)}</ul>`;
+        window.scrollTo({ top: 0 });
+      } catch (err) {
+        $("problems").classList.remove("hidden");
+        $("problems").textContent = err.message;
+        button.disabled = false;
+        button.textContent = "Sign and register";
+      }
+    }
+
+    function useTemplate(kind) {
+      answers = JSON.parse(JSON.stringify(opts.templates[kind]));
+      document.querySelectorAll("#types .chip").forEach((el) => el.classList.toggle("on", el.dataset.kind === kind));
+      renderForm();
+      preview();
+    }
+
+    (async () => {
+      opts = await getJSON("/api/onboarding/options");
+      $("types").innerHTML = opts.kitchen_types.map((t) =>
+        `<button type="button" class="chip" data-kind="${esc(t.code)}">${esc(t.name)}</button>`).join("");
+      $("types").addEventListener("click", (e) => { if (e.target.dataset.kind) useTemplate(e.target.dataset.kind); });
+      $("form").addEventListener("input", previewSoon);
+      $("form").addEventListener("click", (e) => {
+        const t = e.target;
+        if (t.dataset.up !== undefined) {
+          collect();
+          const i = Number(t.dataset.up), p = answers.money.priorities;
+          [p[i - 1], p[i]] = [p[i], p[i - 1]];
+          renderRanks(); previewSoon();
+        } else if (t.dataset.remove !== undefined) {
+          collect();
+          answers.usual_orders.splice(Number(t.dataset.remove), 1);
+          renderUsual(); previewSoon();
+        } else if (t.id === "add_usual") {
+          collect();
+          answers.usual_orders.push({ what: "", category: opts.categories[0].code, amount: null, unit: "L", every: "week" });
+          renderUsual(); previewSoon();
+        }
+      });
+      $("sign").addEventListener("click", sign);
+      const preset = new URLSearchParams(location.search).get("preset");
+      useTemplate(opts.templates[preset] ? preset : opts.kitchen_types[0].code);
+    })();
+  </script>
+</body>
+</html>

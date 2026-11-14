@@ -1791,6 +1791,7 @@ Add three routes to the `routes` list, directly before `Route("/api/info", info)
     .rank .what { flex: 1; }
     .small { min-height: 32px; padding: 0 10px; font-size: 13px; }
     .usual { border-top: 1px solid var(--line); padding: 10px 0; }
+    .usual .inline > input[type=number], .usual .inline > select[data-f=unit] { flex: 0 0 56px; padding: 0 6px; }
     .sentences { list-style: none; margin: 0; padding: 0; }
     .sentences li { display: flex; gap: 8px; align-items: flex-start; padding: 7px 0;
       border-top: 1px solid var(--line); font-size: 14px; }
