@@ -131,7 +131,12 @@ def _product(pid: str) -> dict[str, Any] | None:
     if base is None:
         return None
     merged = dict(base)
-    merged.update({k: v for k, v in _overrides().get(pid, {}).items() if k in ("description", "available_units")})
+    # Same file format as Runner 1's catalog/overrides.py: {"offers": {id: {...}}, "products": {id: {...}}}
+    data = _overrides()
+    if "available_units" in data.get("offers", {}).get(pid, {}):
+        merged["available_units"] = data["offers"][pid]["available_units"]
+    if "description" in data.get("products", {}).get(pid, {}):
+        merged["description"] = data["products"][pid]["description"]
     return merged
 
 

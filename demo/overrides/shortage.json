@@ -1,4 +1,9 @@
 {
-  "464201": {"available_units": 700},
-  "464179": {"available_units": 30}
+  "_readme": "Scene 3. Runner 1's format (catalog/overrides.py). 464306 is the cheapest on-time lactose-free milk in the live data; 464201 and 464179 are the fake server's products.",
+  "offers": {
+    "464306": {"available_units": 700},
+    "464201": {"available_units": 700},
+    "464179": {"available_units": 30}
+  },
+  "products": {}
 }
