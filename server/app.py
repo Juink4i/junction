@@ -1,6 +1,7 @@
 """MCP server "valio-aimo-trade": six tools plus plain HTTP for the screens."""
 
 import importlib
+import os
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -14,6 +15,7 @@ from starlette.responses import JSONResponse
 
 from server.db import connect
 from server.service import Service
+from server.unusual import DecisionsScorer
 
 mcp = MCPServer(
     "valio-aimo-trade",
@@ -38,7 +40,8 @@ def load_catalog() -> Any:
 def service() -> Service:
     global _service
     if _service is None:
-        _service = Service(connect(), load_catalog(), lambda: datetime.now(timezone.utc))
+        scorer = None if os.environ.get("DECISIONS_API") == "off" else DecisionsScorer()
+        _service = Service(connect(), load_catalog(), lambda: datetime.now(timezone.utc), scorer)
     return _service
 
 

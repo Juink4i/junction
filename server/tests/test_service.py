@@ -407,3 +407,65 @@ def test_shortage_hint_copes_with_a_substitute_without_a_price_per_litre(svc, ca
     error = milk(svc, 1000)
     assert error["code"] == "insufficient_stock"
     assert "464179" in error["message"]
+
+
+# Decisions API
+
+class FixedScorer:
+    def __init__(self, value=None, fail=False):
+        self.value, self.fail, self.calls = value, fail, []
+
+    def score(self, buyer, history, lines):
+        self.calls.append((buyer, history, lines))
+        if self.fail:
+            raise RuntimeError("boom")
+        return self.value
+
+
+def scored(clock, catalog, scorer):
+    svc = Service(connect(":memory:"), catalog, clock, unusual_scorer=scorer)
+    return svc, issue_demo_mandates(svc.conn)
+
+
+def test_high_score_asks_the_agent_even_under_5_times_the_usual(clock, catalog):
+    scorer = FixedScorer(0.93)
+    svc, tokens = scored(clock, catalog, scorer)
+    result = svc.place_order(milk(svc, 60)["quote_id"], tokens["cafe"], "Busy weekend")
+    assert result["status"] == "needs_clarification"
+    assert any("93%" in r for r in result["reasons"])
+    buyer, history, lines = scorer.calls[0]
+    assert buyer == "Café Kallio"
+    assert [h["amount"] for h in history] == [20, 20, 25, 15]
+    assert (lines[0]["covers"], lines[0]["category"]) == (60.0, "10400")
+    score_entry = next(e for e in svc.full_log() if e["action"] == "unusual_score")
+    assert score_entry["actor"] == "gemini-decision-1"
+    assert "0.93" in score_entry["reason"]
+
+
+def test_low_score_cannot_wave_through_10_times_the_usual(clock, catalog):
+    svc, tokens = scored(clock, catalog, FixedScorer(0.02))
+    result = svc.place_order(milk(svc, 200)["quote_id"], tokens["cafe"], "Wedding")
+    assert result["status"] == "needs_clarification"
+
+
+def test_score_below_the_threshold_changes_nothing(clock, catalog):
+    svc, tokens = scored(clock, catalog, FixedScorer(0.5))
+    assert svc.place_order(milk(svc, 30)["quote_id"], tokens["cafe"], "Normal")["status"] == "confirmed"
+
+
+def test_scorer_failure_falls_back_to_the_5_times_rule(clock, catalog):
+    svc, tokens = scored(clock, catalog, FixedScorer(fail=True))
+    assert svc.place_order(milk(svc, 30)["quote_id"], tokens["cafe"], "Normal")["status"] == "confirmed"
+    assert svc.place_order(milk(svc, 200)["quote_id"], tokens["cafe"], "Big")["status"] == "needs_clarification"
+    score_entry = next(e for e in svc.full_log() if e["action"] == "unusual_score")
+    assert "5 times" in score_entry["reason"]
+
+
+def test_scorer_is_not_asked_again_once_the_agent_confirmed(clock, catalog):
+    scorer = FixedScorer(0.95)
+    svc, tokens = scored(clock, catalog, scorer)
+    quote_id = milk(svc, 60)["quote_id"]
+    svc.place_order(quote_id, tokens["cafe"], "Busy weekend")
+    result = svc.place_order(quote_id, tokens["cafe"], "Yes, really", confirm_unusual=True)
+    assert result["status"] == "pending_approval"
+    assert len(scorer.calls) == 1

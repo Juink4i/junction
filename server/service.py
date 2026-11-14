@@ -14,6 +14,7 @@ from server import audit, signing
 from server.db import transaction
 from server.mandate import MandateError, verify_mandate
 from server.policy import decide, eur
+from server.unusual import MODEL, REASON_PREFIX, THRESHOLD, flag_reason
 
 QUOTE_TTL = timedelta(minutes=15)
 SUMMARY_FIELDS = ("id", "name_en", "name_fi", "category", "sales_unit", "tags", "labels")
@@ -51,8 +52,10 @@ def locked(method):
 
 
 class Service:
-    def __init__(self, conn: sqlite3.Connection, catalog: Any, now: Callable[[], datetime]):
+    def __init__(self, conn: sqlite3.Connection, catalog: Any, now: Callable[[], datetime],
+                 unusual_scorer: Any = None):
         self.conn = conn
+        self.unusual_scorer = unusual_scorer
         self.catalog = catalog
         self.now = now
         self.key = signing.server_key(conn)
@@ -267,8 +270,14 @@ class Service:
         products = {pid: p for pid, p in products.items() if p is not None}
         history = [dict(row) for row in self.conn.execute(
             "SELECT category, amount, content_unit FROM order_history WHERE buyer_id = ?", (buyer_id,))]
+        if existing is not None:
+            # The agent is confirming an amount it was asked about. Keep the flag, don't re-score.
+            ai_unusual = next((r for r in json.loads(existing["reasons_json"])
+                               if r.startswith(REASON_PREFIX)), None)
+        else:
+            ai_unusual = self._ai_unusual(mandate["buyer"], history, quote, products, quote_id)
         decision = decide({**quote, "need_by": need_by.isoformat()}, mandate, products, history,
-                          confirm_unusual)
+                          confirm_unusual, ai_unusual)
 
         order_id = existing["order_id"] if existing else _new_id("ord")
         approval_id = _new_id("apr") if decision.status == "pending_approval" else None
@@ -291,6 +300,25 @@ class Service:
         self._log("policy", f"decision:{decision.status}", " ".join(decision.reasons),
                   order_id=order_id, quote_id=quote_id)
         return self._order_result(self._order(order_id=order_id))
+
+    def _ai_unusual(self, buyer: str, history: list[dict], quote: dict, products: dict,
+                    quote_id: str) -> str | None:
+        if self.unusual_scorer is None or not history:
+            return None
+        lines = [{**l, "category": products[l["product_id"]].category}
+                 for l in quote["lines"] if l["product_id"] in products]
+        try:
+            score = self.unusual_scorer.score(buyer, history, lines)
+        except Exception:
+            score = None
+        if score is None:
+            self._log(MODEL, "unusual_score", "No score from Google's Decisions API. The 5 times "
+                      "rule still applies on its own.", quote_id=quote_id)
+            return None
+        verdict = "unusual, so the agent is asked" if score >= THRESHOLD else "not unusual"
+        self._log(MODEL, "unusual_score", f"Scored {score:.2f} that this amount is unusual for "
+                  f"{buyer}: {verdict}. The 5 times rule also applies.", quote_id=quote_id)
+        return flag_reason(score) if score >= THRESHOLD else None
 
     # Approvals
 

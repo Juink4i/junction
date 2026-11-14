@@ -207,3 +207,26 @@ def test_unlisted_allergens_are_ignored_when_mandate_allows_unknown():
     products = milk_listing_only(["BM"])
     decision = decide(quote(), mandate("school", unknown_allergens="allow"), products, [])
     assert decision.status == "confirmed"
+
+
+# The Decisions API score can only add a question, never remove one.
+
+AI_FLAG = "Google's Decisions API rates this order 97% likely to be unusual for this buyer."
+
+
+def test_ai_flag_alone_asks_the_agent():
+    decision = decide(quote(), mandate("cafe"), PRODUCTS, HISTORY, ai_unusual=AI_FLAG)
+    assert decision.status == "needs_clarification"
+    assert AI_FLAG in decision.reasons
+
+
+def test_ai_flag_confirmed_by_the_agent_goes_to_a_human():
+    decision = decide(quote(), mandate("cafe"), PRODUCTS, HISTORY, confirm_unusual=True,
+                      ai_unusual=AI_FLAG)
+    assert decision.status == "pending_approval"
+
+
+def test_ai_flag_does_not_soften_a_rejection():
+    tomato = line("460004", units=5, covers=5.0, unit_price=6.5, content_unit="KG")
+    decision = decide(quote(tomato), mandate("hotel"), PRODUCTS, [], ai_unusual=AI_FLAG)
+    assert decision.status == "rejected"

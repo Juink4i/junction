@@ -121,13 +121,16 @@ def _needs_human(quote: dict, mandate: dict, products: dict) -> list[str]:
 
 
 def decide(quote: dict, mandate: dict, products: dict, history: list[dict],
-           confirm_unusual: bool = False) -> Decision:
-    """quote is a verified quote plus its need_by date; mandate is already verified."""
+           confirm_unusual: bool = False, ai_unusual: str | None = None) -> Decision:
+    """quote is a verified quote plus its need_by date; mandate is already verified.
+
+    ai_unusual is an optional reason from an outside scorer. It can only add a question.
+    """
     stops = _hard_stops(quote, mandate, products)
     if stops:
         return Decision("rejected", stops)
 
-    unusual = _unusual(quote, products, history)
+    unusual = _unusual(quote, products, history) + ([ai_unusual] if ai_unusual else [])
     if unusual and not confirm_unusual:
         return Decision(
             "needs_clarification", unusual,
