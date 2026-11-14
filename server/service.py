@@ -98,13 +98,22 @@ class Service:
             self._log(actor, "request_quote", f"No quote given: {result['message']}")
         return result
 
-    def _offers(self, product_ids: list[str], need_by: date) -> dict | None:
-        for _ in range(2):
+    def _offers(self, product_ids: list[str], need_by: date) -> dict | dict[str, Any]:
+        """The offers, or an error. The real catalog already retries once, so only the fake needs it."""
+        attempts = 1 if hasattr(self.catalog, "allergen_status") else 2
+        failure: Exception | None = None
+        for _ in range(attempts):
             try:
                 return self.catalog.price_and_availability(product_ids, need_by)
-            except Exception:
-                continue
-        return None
+            except Exception as e:
+                failure = e
+        # The catalog's message can include upstream details, so it never reaches the agent.
+        retryable = getattr(failure, "retryable", True)
+        message = ("Valio Aimo's price and availability service did not answer. Try again shortly."
+                   if retryable else
+                   "Valio Aimo's price and availability service cannot be reached from this server. "
+                   "Retrying will not help; the operator must fix the setup.")
+        return error("valio_api_unavailable", message, retryable=retryable)
 
     def _substitute_hint(self, product: Any, need_by: date) -> str:
         try:
@@ -114,9 +123,12 @@ class Service:
         options = []
         for offer in offers[:3]:
             substitute = self.catalog.get_product(offer.product_id)
-            if substitute is not None:
-                options.append(f"{offer.product_id} {substitute.name_en} "
-                               f"({eur(offer.comparison_price_eur)} per {offer.comparison_unit})")
+            if substitute is None:
+                continue
+            price = (f"{eur(offer.comparison_price_eur)} per {offer.comparison_unit}"
+                     if offer.comparison_price_eur is not None else
+                     f"{eur(offer.unit_price_eur)} per sales unit")
+            options.append(f"{offer.product_id} {substitute.name_en} ({price})")
         if not options:
             return " No substitute with the same tags can arrive on time."
         return " Substitutes with the same tags that can arrive on time: " + "; ".join(options) + "."
@@ -146,9 +158,8 @@ class Service:
                              "Use the other unit (L or KG).")
 
         offers = self._offers([product.id for product, _ in plans], need_by)
-        if offers is None:
-            return error("valio_api_unavailable", "Valio Aimo's price and availability service did "
-                         "not answer after one retry. Try again shortly.", retryable=True)
+        if "code" in offers and "retryable" in offers:
+            return offers
 
         quote_lines, total_with_tax = [], 0.0
         for product, plan in plans:

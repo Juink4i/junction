@@ -176,3 +176,34 @@ def test_missing_unknown_allergens_rule_is_treated_as_human():
     m = mandate("school")
     del m["hard_rules"]["unknown_allergens"]
     assert decide(quote(tomato), m, PRODUCTS, []).status == "pending_approval"
+
+
+# A product can list some allergens and say nothing about the rest.
+
+def milk_listing_only(contains, free_from=()):
+    return {"464201": replace(PRODUCTS["464201"], allergens_contains=list(contains),
+                              allergens_free_from=list(free_from), allergen_info_missing=False)}
+
+
+def test_blocked_allergen_the_product_says_nothing_about_needs_a_human():
+    products = milk_listing_only(["BM"], free_from=["AP"])
+    decision = decide(quote(), mandate("school"), products, [])
+    assert decision.status == "pending_approval"
+    assert any("AE, AN" in r and "unknown" in r.lower() for r in decision.reasons)
+
+
+def test_blocked_allergens_all_listed_as_free_from_is_confirmed():
+    products = milk_listing_only(["BM"], free_from=["AP", "AN", "AE"])
+    assert decide(quote(), mandate("school"), products, []).status == "confirmed"
+
+
+def test_blocked_allergen_the_product_says_nothing_about_is_rejected_when_mandate_says_reject():
+    products = milk_listing_only(["BM"])
+    decision = decide(quote(), mandate("school", unknown_allergens="reject"), products, [])
+    assert decision.status == "rejected"
+
+
+def test_unlisted_allergens_are_ignored_when_mandate_allows_unknown():
+    products = milk_listing_only(["BM"])
+    decision = decide(quote(), mandate("school", unknown_allergens="allow"), products, [])
+    assert decision.status == "confirmed"

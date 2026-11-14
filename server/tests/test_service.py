@@ -397,3 +397,13 @@ def test_calls_that_fail_early_are_logged_too(svc):
     svc.get_audit_log()
     svc.decide_approval("apr_missing", approve=True)
     assert [e["action"] for e in svc.full_log()] == ["get_audit_log", "approval:not_found"]
+
+
+def test_shortage_hint_copes_with_a_substitute_without_a_price_per_litre(svc, catalog):
+    catalog.offer_changes["464201"] = {"available_units": 700}
+    catalog.offer_changes["464179"] = {"comparison_price_eur": None, "comparison_unit": None}
+    catalog.substitute_candidates = lambda pid, tags, pct, d: [
+        replace(fake_catalog._offer("464179", d), comparison_price_eur=None, comparison_unit=None)]
+    error = milk(svc, 1000)
+    assert error["code"] == "insufficient_stock"
+    assert "464179" in error["message"]
