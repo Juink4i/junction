@@ -79,7 +79,7 @@
             ${chips("allergen", opts.allergens, a.safety.blocked_allergens)}</div>
           <div class="field"><div class="lab">When a product has no allergen information</div>
             ${chips("unknown", opts.unknown_allergens, [a.safety.unknown_allergens], "radio")}</div>
-          <div class="field"><div class="lab">Every product must be</div>
+          <div class="field"><div class="lab">Every product must be <span class="faint">(optional)</span></div>
             ${chips("must_be", opts.tags, a.safety.must_be)}</div>
         </section>
         <section class="card"><h2>Money</h2>
