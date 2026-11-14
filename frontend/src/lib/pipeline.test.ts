@@ -91,6 +91,33 @@ describe('runView', () => {
     expect(none.steps[1].detail).toContain('Nothing could be offered')
   })
 
+  it('stops the quote step with the reason when a run ends with nothing offered', () => {
+    const empty = {
+      status: 'ok',
+      options: [],
+      not_offered: [{ product_id: '474686', name: 'Oat drink', reason: 'Whether Oat drink contains AN is unknown.' }],
+    }
+    const v = runView([
+      ev('run_start'),
+      ev('tool_call', { tool: 'request_quote' }),
+      ev('tool_result', { tool: 'request_quote', result: empty }),
+      ev('tool_call', { tool: 'search_products' }),
+      ev('run_end'),
+    ])
+    expect(v.steps.map((s) => s.state)).toEqual(['done', 'stopped', 'todo', 'todo'])
+    expect(v.steps[1].detail).toBe('Nothing could be offered: Whether Oat drink contains AN is unknown.')
+  })
+
+  it('closes the quote step when a run ends after options but no order', () => {
+    const v = runView([
+      ev('run_start'),
+      ev('tool_call', { tool: 'request_quote' }),
+      ev('tool_result', { tool: 'request_quote', result: quoteSet }),
+      ev('run_end'),
+    ])
+    expect(v.steps.map((s) => s.state)).toEqual(['done', 'done', 'todo', 'todo'])
+  })
+
   it('shows a person rejecting as stopped and the run as rejected', () => {
     const v = runView([
       ev('run_start'),

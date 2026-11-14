@@ -135,7 +135,9 @@ export function runView(all: AgentEvent[]): RunView {
           } else if (isObj(e.result) && e.result.status === 'needs_clarification') {
             compareDetail = 'Valio Aimo asked the agent a question first.'
           } else {
-            compareDetail = 'Nothing could be offered: the agent is trying another way.'
+            const left = isObj(e.result) && Array.isArray(e.result.not_offered) ? e.result.not_offered[0] : null
+            const why = isObj(left) && typeof left.reason === 'string' ? left.reason : 'the agent is trying another way.'
+            compareDetail = `Nothing could be offered: ${why}`
           }
         }
         break
@@ -192,7 +194,11 @@ export function runView(all: AgentEvent[]): RunView {
         break
     }
   }
-  if (view.finished && shop === 'active') shop = 'done'
+  // Person is left alone: a run can end while an approval is still really pending.
+  if (view.finished) {
+    if (shop === 'active') shop = 'done'
+    if (compare === 'active') compare = view.quote ? 'done' : 'stopped'
+  }
 
   view.steps = [
     { key: 'shop', title: 'Shopper', who: 'agent', state: shop, detail: shopDetail },
