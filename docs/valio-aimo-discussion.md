@@ -65,6 +65,10 @@ Valio Aimo mock APIs (price, availability) + our copy of the product file
 
 In the pitch we present four roles: Shopper, Substitution, Policy and Auditor. That shows **separation of duties**: one role shops, three check its work. Only Shopper and Substitution use AI. Policy and Auditor are plain code, so a customer's finance team can read and test the rules.
 
+**Decided: start with one AI agent** that does both Shopper and Substitution. It's faster to build and has fewer places for bugs to hide. We split Substitution into its own agent (an ADK sub-agent) only if its suggestions are poor, or if we want the multi-agent story for the Google prize. Splitting later is cheap, because the server and tools don't change.
+
+**Substitution is mostly code.** Code finds the candidates: same category, keeps every must-keep tag, under the price cap, can arrive on time. The AI only ranks the few that are left and explains the trade-off.
+
 ### The six tools
 
 | Tool | What it does | Notes |
@@ -143,7 +147,7 @@ Each entry stores the time, who acted, what happened, a plain-language reason, a
 
 **Must:** product search, quantity maths, the six tools, signed quotes, Policy checks with the mandate, approval page, plain log, buyer bot, injection demo.
 
-**If time allows:** hash-chained log and Verify button, "ask the bot" with the Decisions API, substitute ranking, simulated partial stock, carbon and delivery comparison.
+**If time allows:** hash-chained log and Verify button, "ask the bot" with the Decisions API, substitute ranking, simulated partial stock, carbon and delivery comparison, Substitution as its own agent.
 
 **Extra:** Valio Aimo's own seller bot (A2A), Verifiable Credentials, UCP.
 
@@ -163,10 +167,11 @@ One slide each for:
 ## 9. Decisions for the team
 
 1. Is the "Must" list right? What do we cut first?
-2. One AI agent, or Shopper and Substitution as two?
-3. Do we rely on the Decisions API? Who builds the fallback?
-4. Who builds what: search and units, server and tools, Policy and log, buyer bot, approval page, pitch?
-5. Python or TypeScript? Where do we host?
+2. Do we rely on the Decisions API? Who builds the fallback?
+3. Who builds what: search and units, server and tools, Policy and log, buyer bot, approval page, pitch?
+4. Python or TypeScript? Where do we host?
+
+Already decided: one AI agent first (section 4).
 
 ## Housekeeping
 
