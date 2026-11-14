@@ -135,6 +135,9 @@ def test_missing_fields_are_a_bad_request(svc, public_pem, token):
     ("usual_orders", [{"category": "10400", "amount": -1, "content_unit": "L", "every": "week"}]),
     ("usual_orders", [{"category": "10400", "amount": 40, "content_unit": "pints", "every": "week"}]),
     ("usual_orders", {"category": "10400"}),
+    ("delivery", {"days": ["FUNDAY"]}),
+    ("delivery", {"days": []}),
+    ("delivery", "MON"),
 ])
 def test_a_typo_in_a_new_mandate_part_is_refused(svc, part, value):
     status, body = svc.register_buyer(*signed({**MANDATE, part: value}))
@@ -260,3 +263,11 @@ def test_post_buyers_passes_the_enrolment_code_on(strict):
         assert client.post("/buyers", json={**body, "enrolment_code": CODE}).status_code == 201
     finally:
         server_app.use_service(None)
+
+
+def test_an_order_arriving_on_the_wrong_weekday_goes_to_a_person(svc):
+    public_pem, token = signed({**MANDATE, "delivery": {"days": ["TUE", "THU"]}})
+    svc.register_buyer(public_pem, token)
+    result = svc.place_order(milk(svc, 40)["quote_id"], token, "Weekly milk")  # arrives Monday
+    assert result["status"] == "pending_approval"
+    assert any("Tuesday and Thursday only" in r for r in result["reasons"])

@@ -103,9 +103,6 @@ PRIORITY_WORDS = {
     "finnish": "Finnish origin",
     "sustainability": "organic or other sustainability labels and a lower carbon footprint",
 }
-WEEKDAY_WORDS = {"MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "Thursday",
-                 "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday"}
-
 PREFERENCES_INTRO = """\
 BUYER PREFERENCES
 These are preferences, not rules. Use them only to choose between products that already fit the \
@@ -123,9 +120,6 @@ def preference_lines(profile: dict | None) -> list[str]:
                      + ". This order replaces ranking points c to e above.")
     if profile.get("pack_size") in ("small", "large"):
         lines.append(f"Prefer {profile['pack_size']} packs.")
-    days = [WEEKDAY_WORDS[d] for d in profile.get("delivery_days", []) if d in WEEKDAY_WORDS]
-    if days:
-        lines.append("Prefer deliveries on " + " or ".join(days) + ".")
     for order in profile.get("usual_orders", []):
         lines.append(f"A usual order is {order['amount']:g} {order['unit']} of {order['what']} "
                      f"every {order['every']}. \"The usual\" means this.")

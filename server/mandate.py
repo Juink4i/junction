@@ -11,6 +11,7 @@ from server import signing
 
 UNKNOWN_ALLERGEN_RULES = ("human", "reject", "allow")
 PERIODS = ("week", "month")
+WEEKDAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
 BUYER_ID = re.compile(r"[a-z0-9-]{3,64}")
 
 
@@ -81,6 +82,11 @@ def _shape_problems(mandate: dict) -> list[str]:
         if not (isinstance(usual, list) and all(_usual_order(o) for o in usual)):
             problems.append("usual_orders must be a list of orders, each with a category, an amount "
                             "above zero, a content_unit of L or KG, and every as week or month")
+    if "delivery" in mandate:
+        delivery = mandate["delivery"]
+        days = delivery.get("days") if isinstance(delivery, dict) else None
+        if not (isinstance(days, list) and days and all(day in WEEKDAYS for day in days)):
+            problems.append("delivery.days must be a non-empty list of weekdays from MON to SUN")
     if "agent_key" in mandate and not signing.is_ed25519_public(mandate["agent_key"]):
         problems.append("agent_key must be an Ed25519 public key in PEM form")
     return problems

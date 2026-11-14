@@ -281,3 +281,25 @@ def test_a_budget_period_starts_on_monday_or_on_the_first():
     saturday = datetime(2026, 11, 14, 10, 30, tzinfo=timezone.utc)
     assert period_start("week", saturday) == datetime(2026, 11, 9, tzinfo=timezone.utc)
     assert period_start("month", saturday) == datetime(2026, 11, 1, tzinfo=timezone.utc)
+
+
+# Delivery days
+
+
+def test_delivery_on_a_day_the_kitchen_cannot_receive_needs_a_human():
+    m = mandate("cafe")
+    m["delivery"] = {"days": ["TUE", "THU"]}
+    decision = decide(quote(), m, PRODUCTS, [])  # the default line arrives on Monday 2026-11-16
+    assert decision.status == "pending_approval"
+    assert any("would arrive on a Monday" in r and "Tuesday and Thursday only" in r
+               for r in decision.reasons)
+
+
+def test_delivery_on_an_allowed_day_is_confirmed():
+    m = mandate("cafe")
+    m["delivery"] = {"days": ["MON", "THU"]}
+    assert decide(quote(), m, PRODUCTS, []).status == "confirmed"
+
+
+def test_a_mandate_without_delivery_days_accepts_any_day():
+    assert decide(quote(), mandate("cafe"), PRODUCTS, []).status == "confirmed"

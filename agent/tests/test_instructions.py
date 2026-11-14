@@ -44,7 +44,6 @@ from agent.instructions import preference_lines  # noqa: E402
 PROFILE = {
     "buyer_id": "aurinko-3f2a", "name": "Päiväkoti Aurinko", "kitchen_type": "daycare",
     "priorities": ["finnish", "price", "reliability", "sustainability"], "pack_size": "small",
-    "delivery_days": ["MON", "THU"],
     "usual_orders": [{"what": "lactose-free milk", "amount": 40, "unit": "L", "every": "week"}],
 }
 RULE_WORDS = ("€", "eur", "max_order", "auto_approve", "allergen", "limit", "threshold",
@@ -72,7 +71,3 @@ def test_the_preferences_block_holds_no_rule():
     for word in RULE_WORDS:
         assert word not in text, word
     assert not re.search(r"\b\d+\s*(euros?|e)\b", text)
-
-
-def test_delivery_days_are_mentioned_while_they_are_only_a_preference():
-    assert "Prefer deliveries on Monday or Thursday." in preference_lines(PROFILE)

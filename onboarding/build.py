@@ -156,6 +156,8 @@ def build(answers: dict[str, Any], buyer_id: str, today: date,
     if usual:
         mandate["usual_orders"] = [{"category": o["category"], "amount": o["amount"],
                                     "content_unit": o["unit"], "every": o["every"]} for o in usual]
+    if days:
+        mandate["delivery"] = {"days": days}
     if agent_public_pem:
         mandate["agent_key"] = agent_public_pem
 
@@ -165,7 +167,6 @@ def build(answers: dict[str, Any], buyer_id: str, today: date,
         "kitchen_type": kitchen.get("type") or "other",
         "priorities": list(money["priorities"]),
         "pack_size": pack,
-        "delivery_days": days,
         "usual_orders": [{"what": (o.get("what") or "").strip() or CATEGORIES[o["category"]],
                           "amount": o["amount"], "unit": o["unit"], "every": o["every"]}
                          for o in usual],
@@ -198,6 +199,9 @@ def build(answers: dict[str, Any], buyer_id: str, today: date,
                   f"{order['unit']} of {order['what']} each {order['every']}) is checked with the "
                   "kitchen first.")
     say(RULE, "A delivery after the date the goods are needed by needs a person's approval.")
+    if days:
+        say(RULE, f"Goods can arrive on {_and([WEEKDAYS[d] for d in days])}. "
+                  "Any other day needs a person's approval.")
     if agent_public_pem:
         say(RULE, "Orders must be signed by this kitchen's agent. A copy of this mandate alone "
                   "cannot place an order.")
@@ -208,6 +212,4 @@ def build(answers: dict[str, Any], buyer_id: str, today: date,
     say(PREFERENCE, "When several products fit, prefer "
                     f"{', then '.join(PRIORITIES[p] for p in money['priorities'])}.")
     say(PREFERENCE, f"Prefer {PACK_SIZES[pack]}.")
-    if days:
-        say(PREFERENCE, f"Prefer deliveries on {_and([WEEKDAYS[d] for d in days])}.")
     return Built(mandate, profile, rows)

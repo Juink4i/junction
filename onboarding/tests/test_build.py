@@ -73,15 +73,19 @@ def test_preferences_stay_out_of_the_mandate():
 
 def test_the_profile_holds_no_rule():
     assert set(built().profile) == {"buyer_id", "name", "kitchen_type", "priorities", "pack_size",
-                                    "delivery_days", "usual_orders"}
+                                    "usual_orders"}
 
 
-def test_delivery_days_are_a_preference_until_the_server_enforces_them():
+def test_delivery_days_are_a_rule_in_the_mandate():
     result = built()
-    assert "delivery" not in result.mandate
-    assert result.profile["delivery_days"] == ["MON", "THU"]
-    assert "Prefer deliveries on Monday and Thursday." in texts(result, "preference")
-    assert options()["delivery_days_side"] == "preference"
+    assert result.mandate["delivery"] == {"days": ["MON", "THU"]}
+    assert "delivery_days" not in result.profile
+    assert ("Goods can arrive on Monday and Thursday. Any other day needs a person's approval."
+            in texts(result, "rule"))
+    assert options()["delivery_days_side"] == "rule"
+    answers = template("daycare")
+    answers["delivery"]["days"] = []
+    assert "delivery" not in built(answers).mandate
 
 
 def test_agent_key_is_in_the_mandate_only_when_given():

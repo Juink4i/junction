@@ -1,11 +1,17 @@
 """Policy: plain code that decides what happens to an order. No AI in here."""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from statistics import median
 
 UNUSUAL_FACTOR = 5
 PERIOD_WORDS = {"week": ("this week's", "weekly"), "month": ("this month's", "monthly")}
+WEEKDAY_NAMES = {"MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "Thursday",
+                 "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday"}
+
+
+def _and(words: list[str]) -> str:
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
 
 
 def period_start(period: str, now: datetime) -> datetime:
@@ -111,6 +117,7 @@ def _needs_human(quote: dict, mandate: dict, products: dict, spent_in_period: fl
             this, adjective = PERIOD_WORDS[budget["period"]]
             reasons.append(f"This order of {eur(quote['total_eur'])} would bring {this} spending "
                            f"to {eur(total)}, over the {adjective} budget of {eur(budget['max_eur'])}.")
+    days = (mandate.get("delivery") or {}).get("days")
     for line in quote["lines"]:
         product = products[line["product_id"]]
         if line["cutoff_passed"]:
@@ -121,6 +128,12 @@ def _needs_human(quote: dict, mandate: dict, products: dict, spent_in_period: fl
         elif line["available_date"] > quote["need_by"]:
             reasons.append(f"{line['name']} would arrive on {line['available_date']}, "
                            f"after the need-by date {quote['need_by']}.")
+        if days and line["available_date"] is not None:
+            arrives = list(WEEKDAY_NAMES)[date.fromisoformat(line["available_date"]).weekday()]
+            if arrives not in days:
+                allowed = _and([name for code, name in WEEKDAY_NAMES.items() if code in days])
+                reasons.append(f"{line['name']} would arrive on a {WEEKDAY_NAMES[arrives]}. "
+                               f"This kitchen receives goods on {allowed} only.")
         if rules.get("unknown_allergens", "human") == "human":
             unknown = _unknown_blocked(product, {c.upper() for c in rules.get("blocked_allergens", [])})
             if product.allergen_info_missing:

@@ -101,7 +101,7 @@ A small JSON document the buyer signs (Ed25519, as a JWS token). It says what th
 
 Later this could become a W3C Verifiable Credential, or follow Google's AP2 format.
 
-**Where a mandate comes from.** A kitchen signs up on the onboarding page (`/onboarding`). Each answer becomes a rule in the mandate or a preference in a profile that only its own agent reads. The page adds two optional parts to the mandate: `budget` (for example `{"period": "week", "max_eur": 150}`) and `usual_orders` (what the kitchen normally buys, the baseline for the "looks odd" check). The kitchen signs the mandate with a key made on its own side and registers the public half with `POST /buyers`.
+**Where a mandate comes from.** A kitchen signs up on the onboarding page (`/onboarding`). Each answer becomes a rule in the mandate or a preference in a profile that only its own agent reads. The page adds three optional parts to the mandate: `delivery` (for example `{"days": ["MON", "THU"]}`, the days the kitchen can receive goods), `budget` (for example `{"period": "week", "max_eur": 150}`) and `usual_orders` (what the kitchen normally buys, the baseline for the "looks odd" check). The kitchen signs the mandate with a key made on its own side and registers the public half with `POST /buyers`.
 
 **Two keys.** The kitchen's key signs the mandate. The agent has its own key; its public half is written into the mandate as `agent_key`, and the agent signs every order with the private half. The server follows the chain: kitchen key → mandate → agent key → this order. A copied mandate is useless without the agent's key, and a stolen agent key is still held to the mandate's rules.
 
@@ -114,6 +114,7 @@ Later this could become a W3C Verifiable Credential, or follow Google's AP2 form
 | Looks odd for this buyer, e.g. 10× their usual amount | ❓ **Ask the bot** to confirm |
 | Over the order limit | 👤 **Human** approves |
 | Would take this week's or month's spending over the budget | 👤 **Human** approves |
+| Would arrive on a weekday the kitchen cannot receive goods | 👤 **Human**, with the day shown |
 | Substitute drops a must-keep tag or costs too much | 👤 **Human** |
 | Arrives after the need-by date, or the cut-off has passed | 👤 **Human**, with options shown |
 | Allergen info missing for a strict buyer | 👤 **Human** |

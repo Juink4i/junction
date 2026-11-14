@@ -20,8 +20,8 @@ PACK_SIZES = {"small": "small packs", "large": "large packs"}
 PERIODS = {"week": "week", "month": "month"}
 UNKNOWN_ALLERGEN_CHOICES = {"human": "A person checks it", "reject": "Refuse it"}
 KITCHEN_TYPES = {"daycare": "Day-care", "school": "School", "hotel": "Hotel", "cafe": "Café"}
-# Which label the page shows beside delivery days. "preference" until the server enforces them.
-DELIVERY_DAYS_SIDE = "preference"
+# Which label the page shows beside delivery days. The server enforces them, so they are a rule.
+DELIVERY_DAYS_SIDE = "rule"
 
 _PRICE_FIRST = ["price", "reliability", "finnish", "sustainability"]
 _WORKDAYS = ["MON", "TUE", "WED", "THU", "FRI"]
