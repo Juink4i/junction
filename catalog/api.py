@@ -166,6 +166,46 @@ def units_needed(product_id: str, amount: float, unit: str) -> UnitPlan:
                     content_unit=unit, units=n, covers=round(n * content, 4))
 
 
+def substitute_candidates(product_id: str, must_keep_tags: list[str],
+                          max_price_increase_pct: float, delivery_date: date) -> list[Offer]:
+    """Products that can replace `product_id`, decided by code. The AI only ranks what's left.
+
+    A candidate is in the same category, has every must-keep tag, can be ordered and arrive by
+    `delivery_date` with its cut-off not passed, and costs at most `max_price_increase_pct`
+    more per litre/kilo (comparison price, so a 1 l carton and a 2 x 10 l case compare fairly).
+    Valio Aimo's official substitutes come first, then cheapest per litre/kilo first.
+    One price call and one availability call for the whole shortlist.
+    """
+    original = get_product(product_id)
+    if original is None:
+        raise KeyError(product_id)
+    where = ["category = ?", "id != ?"]
+    args: list = [original.category, original.id]
+    for tag in must_keep_tags or []:
+        where.append("EXISTS (SELECT 1 FROM json_each(products.tags) WHERE value = ?)")
+        args.append(tag)
+    with _connect() as con:
+        ids = [r["id"] for r in con.execute(
+            f"SELECT id FROM products WHERE {' AND '.join(where)} ORDER BY id", args)]
+
+    offers = price_and_availability([original.id, *ids], delivery_date)
+    ref = offers.get(original.id)
+    if ref is None or ref.comparison_price_eur is None:
+        raise ValueError(f"{original.id} has no price per litre/kilo to compare substitutes against")
+    cap = ref.comparison_price_eur * (1 + max_price_increase_pct / 100) + 1e-9
+
+    official = set(original.official_substitutes)
+    keep = [
+        o for pid, o in offers.items()
+        if pid in ids
+        and o.orderable and not o.cutoff_passed
+        and o.available_date is not None and o.available_date <= delivery_date
+        and o.comparison_unit == ref.comparison_unit
+        and o.comparison_price_eur is not None and o.comparison_price_eur <= cap
+    ]
+    return sorted(keep, key=lambda o: (o.product_id not in official, o.comparison_price_eur, o.product_id))
+
+
 def allergen_status(product_id: str, allergen_code: str) -> AllergenStatus:
     """What the product data says about one allergen. "unknown" is never safe.
 
