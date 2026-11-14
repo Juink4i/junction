@@ -12,7 +12,7 @@
       border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink);
       font-weight: 600; font-size: 13.5px; cursor: pointer; user-select: none; }
     .chip input { position: absolute; opacity: 0; pointer-events: none; }
-    .chip:has(input:checked), .chip.on { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+    .chip:has(input:checked) { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
     .card h2 { margin: 0 0 4px; font-size: 16px; }
     .field { margin-top: 14px; }
     .lab { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; font-weight: 600;
@@ -38,12 +38,9 @@
   <header class="bar">
     <div class="grow">
       <h1>Set up your kitchen</h1>
-      <p class="sub">Each answer becomes a <span class="pill code">Rule</span> the server enforces, or a
-        <span class="pill brand">Preference</span> for your agent.</p>
     </div>
   </header>
   <main class="wrap stack">
-    <div id="types" class="chips"></div>
     <form id="form" class="stack" onsubmit="return false"></form>
     <section id="done" class="card hidden"></section>
   </main>
@@ -58,9 +55,6 @@
     const post = (body) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     let opts = null, answers = null, timer = null;
 
-    const pill = (side) => side === "rule"
-      ? '<span class="pill code">Rule</span>' : '<span class="pill brand">Preference</span>';
-
     const chips = (name, items, chosen, type = "checkbox") => '<div class="chips">' + items.map((i) =>
       `<label class="chip"><input type="${type}" name="${name}" value="${esc(i.code)}"${chosen.includes(i.code) ? " checked" : ""}>${esc(i.name)}</label>`
     ).join("") + "</div>";
@@ -73,39 +67,39 @@
       const perPeriod = opts.periods.map((p) => ({ code: p.code, name: "per " + p.name }));
       $("form").innerHTML = `
         <section class="card"><h2>Your kitchen</h2>
-          <div class="field"><label class="lab" for="name">Kitchen name ${pill("rule")}</label>
+          <div class="field"><label class="lab" for="name">Kitchen name</label>
             <input type="text" id="name" value="${esc(a.kitchen.name)}"></div>
-          <div class="field"><label class="lab" for="approver">Who approves what the agent may not order alone ${pill("rule")}</label>
+          <div class="field"><label class="lab" for="approver">Who approves what the agent may not order alone</label>
             <input type="text" id="approver" value="${esc(a.kitchen.approver)}"></div>
-          <div class="field"><label class="lab" for="enrolment_code">Valio Aimo enrolment code, from your webshop account ${pill("rule")}</label>
+          <div class="field"><label class="lab" for="enrolment_code">Valio Aimo enrolment code, from your webshop account</label>
             <input type="text" id="enrolment_code" value="${esc(a.kitchen.enrolment_code)}"></div>
         </section>
         <section class="card"><h2>Food safety</h2>
-          <div class="field"><div class="lab">Allergens that must never arrive ${pill("rule")}</div>
+          <div class="field"><div class="lab">Allergens that must never arrive</div>
             ${chips("allergen", opts.allergens, a.safety.blocked_allergens)}</div>
-          <div class="field"><div class="lab">When a product has no allergen information ${pill("rule")}</div>
+          <div class="field"><div class="lab">When a product has no allergen information</div>
             ${chips("unknown", opts.unknown_allergens, [a.safety.unknown_allergens], "radio")}</div>
-          <div class="field"><div class="lab">Every product must be ${pill("rule")}</div>
+          <div class="field"><div class="lab">Every product must be</div>
             ${chips("must_be", opts.tags, a.safety.must_be)}</div>
         </section>
         <section class="card"><h2>Money</h2>
-          <div class="field"><div class="lab">What the agent may buy. None ticked means anything. ${pill("rule")}</div>
+          <div class="field"><div class="lab">What the agent may buy. None ticked means anything.</div>
             ${chips("category", opts.categories, a.money.allowed_categories)}</div>
-          <div class="field"><label class="lab" for="max_order">The agent may spend alone, per order, in euros ${pill("rule")}</label>
+          <div class="field"><label class="lab" for="max_order">The agent may spend alone, per order, in euros</label>
             <input type="number" id="max_order" min="0" step="10" value="${esc(a.money.max_order_eur)}"></div>
-          <div class="field"><div class="lab">Budget in euros. Leave empty for none. ${pill("rule")}</div>
+          <div class="field"><div class="lab">Budget in euros. Leave empty for none.</div>
             <div class="inline">
               <input type="number" id="budget" min="0" step="10" value="${esc(a.money.budget ? a.money.budget.max_eur : "")}">
               <select id="budget_period">${picks(perPeriod, a.money.budget ? a.money.budget.period : "week")}</select>
             </div></div>
-          <div class="field"><div class="lab">What matters most, in order ${pill("preference")}</div><div id="ranks"></div></div>
+          <div class="field"><div class="lab">What matters most, in order</div><div id="ranks"></div></div>
         </section>
         <section class="card"><h2>Delivery and rhythm</h2>
-          <div class="field"><div class="lab">Days you can receive goods. None ticked means any day. ${pill(opts.delivery_days_side)}</div>
+          <div class="field"><div class="lab">Days you can receive goods. None ticked means any day.</div>
             ${chips("day", opts.weekdays, a.delivery.days)}</div>
-          <div class="field"><div class="lab">Pack size ${pill("preference")}</div>
+          <div class="field"><div class="lab">Pack size</div>
             ${chips("pack", opts.pack_sizes, [a.delivery.pack_size], "radio")}</div>
-          <div class="field"><div class="lab">Usual orders: what, how much, how often ${pill("rule")}</div>
+          <div class="field"><div class="lab">Usual orders: what, how much, how often</div>
             <div id="usual"></div>
             <button type="button" class="btn small" id="add_usual">Add a usual order</button></div>
         </section>`;
@@ -181,7 +175,7 @@
       button.innerHTML = '<span class="spinner"></span> Signing';
       try {
         const out = await getJSON("/api/onboarding", post(answers));
-        for (const id of ["types", "form", "signbar"]) $(id).classList.add("hidden");
+        for (const id of ["form", "signbar"]) $(id).classList.add("hidden");
         $("done").classList.remove("hidden");
         $("done").innerHTML = `<h2>Signed and registered</h2>
           <p><strong>${esc(out.name)}</strong> is now a buyer at Valio Aimo. Its agent can order straight away, inside the rules it signed.</p>
@@ -197,16 +191,12 @@
 
     function useTemplate(kind) {
       answers = JSON.parse(JSON.stringify(opts.templates[kind]));
-      document.querySelectorAll("#types .chip").forEach((el) => el.classList.toggle("on", el.dataset.kind === kind));
       renderForm();
       preview();
     }
 
     (async () => {
       opts = await getJSON("/api/onboarding/options");
-      $("types").innerHTML = opts.kitchen_types.map((t) =>
-        `<button type="button" class="chip" data-kind="${esc(t.code)}">${esc(t.name)}</button>`).join("");
-      $("types").addEventListener("click", (e) => { if (e.target.dataset.kind) useTemplate(e.target.dataset.kind); });
       $("form").addEventListener("input", previewSoon);
       $("form").addEventListener("click", (e) => {
         const t = e.target;

@@ -26,7 +26,7 @@ Existing behaviour is protected: a mandate without the new sections is treated e
 - A **rule** goes into the signed mandate. Server code enforces it.
 - A **preference** goes into a profile that only the buyer's agent reads. It helps the agent choose between products that already fit. Nothing enforces it, and the server never receives it.
 
-The page shows one of these two labels beside every answer.
+The page itself keeps the form plain, without these labels. The chat card shown after signing lists every rule and preference with its label.
 
 | Group | Question | Lands in | Enforced by |
 |---|---|---|---|
@@ -250,7 +250,7 @@ Problems it reports: an empty kitchen name or approver; a per-order amount that 
 | `POST /api/onboarding/preview` | `{problems, sentences}` for the current answers |
 | `POST /api/onboarding` | Enrols the kitchen. 201 with `{buyer_id, name, sentences}`, or the usual error shape |
 
-The page is built for phone width first, because it sits inside the stage's phone frame. It has template chips, the four groups with each answer labelled Rule or Preference, and one button, **Sign and register**. Problems from the preview route show above the button as answers change. The page does not repeat the rules as a list; the chat card shows them after signing.
+The page is built for phone width first, because it sits inside the stage's phone frame. It has the four groups and one button, **Sign and register**. It opens prefilled with the day-care template; `?preset=` picks another kitchen type. There are no kitchen-type buttons and no Rule or Preference labels on the page. Problems from the preview route show above the button as answers change. The page does not repeat the rules as a list; the chat card shows them after signing.
 
 The sign-up route picks the buyer id, asks `agent/identity.py` for that buyer's agent public key, and passes both to `enroll`.
 

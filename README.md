@@ -69,7 +69,7 @@ Tests: `uv run pytest`
 | `/approvals` | Phone page. Orders the agent may not place alone, with the reasons the code gave. Approve or Reject. |
 | `/log` | Every search, quote, decision and approval in plain language. **Verify log** recomputes the hash chain: green if intact, red at the first edited row. |
 | `/chat` | What the agent says and does, live. AI messages, MCP tool calls and the server's decisions look different on purpose. |
-| `/onboarding` | A kitchen sets its rules and preferences on one page and signs them. Each answer is labelled **Rule** (the server enforces it) or **Preference** (only its agent uses it). |
+| `/onboarding` | A kitchen sets its rules and preferences on one page and signs them. Rules go into the signed mandate the server enforces; preferences only steer its agent. The chat page lists which is which after signing. `?preset=school` (or `hotel`, `cafe`) prefills another kitchen type; the default is the day-care. |
 
 ## The demo (2 minutes)
 
