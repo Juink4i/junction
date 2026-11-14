@@ -1,0 +1,25 @@
+[project]
+name = "valio-aimo-trade"
+version = "0.1.0"
+description = "Trusted Trade Agents: an open MCP front door for Valio Aimo, plus a demo buyer agent."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "google-adk>=2.14.1",
+    "httpx>=0.28.1",
+    "mcp[cli]>=2.3.0",
+    "python-dotenv>=1.2.4",
+    "starlette>=1.10.0",
+    "uvicorn>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
