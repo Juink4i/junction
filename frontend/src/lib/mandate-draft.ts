@@ -111,7 +111,7 @@ export function changesOf(
   }
   if (d.mustKeep.join() !== m.substitution.must_keep.join()) {
     subs.must_keep = d.mustKeep
-    summary.push(`Substitutes must stay: ${d.mustKeep.map(tagName).join(', ') || 'nothing in particular'}`)
+    summary.push(`Every product must be: ${d.mustKeep.map(tagName).join(', ') || 'nothing in particular'}`)
   }
   if (Object.keys(subs).length) body.substitution = subs
 

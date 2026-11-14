@@ -6,12 +6,16 @@ import copy
 from typing import Any
 
 from catalog.names import ALLERGEN_NAMES, CATEGORY_NAMES, TAG_NAMES
+from server.claims import FREE_FROM
 
 # The 14 allergens EU law requires on labels, as GS1 codes.
 EU_ALLERGEN_CODES = ("AW", "AC", "AE", "AF", "AP", "AY", "AM", "AN", "BC", "BM", "AS", "AU", "NL", "UM")
 ALLERGENS = {code: ALLERGEN_NAMES[code] for code in EU_ALLERGEN_CODES}
 CATEGORIES = dict(CATEGORY_NAMES)
 TAGS = dict(TAG_NAMES)  # every nutrition claim in the product file, most common first
+# What a kitchen may require of every product: only what allergen data can prove, or a rule like
+# "every product must be vegan" rules out every egg. Others go on a single order.
+MUST_BE = {code: name for code, name in TAGS.items() if code in FREE_FROM}
 WEEKDAYS = {"MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "Thursday",
             "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday"}
 PRIORITIES = {"price": "the lowest price", "reliability": "reliable delivery",
@@ -85,7 +89,7 @@ def options() -> dict[str, Any]:
         "templates": copy.deepcopy(TEMPLATES),
         "allergens": _listed(ALLERGENS),
         "categories": _listed(CATEGORIES),
-        "tags": _listed(TAGS),
+        "tags": _listed(MUST_BE),
         "weekdays": _listed(WEEKDAYS),
         "priorities": _listed(PRIORITIES),
         "pack_sizes": _listed(PACK_SIZES),

@@ -147,6 +147,7 @@ export default function Onboarding() {
           </Field>
           <Field label={<>Every product must be <span className="font-normal text-muted-foreground/80">(optional)</span></>}>
             <Chips items={opts.tags} chosen={a.safety.must_be} onChange={(v) => update((d) => void (d.safety.must_be = v))} />
+            <p className="text-xs text-muted-foreground">The supplier says so, or its allergen data shows it. If the data doesn’t say, it follows the missing-allergen setting. Other properties, like vegan, go on a single order.</p>
           </Field>
         </Section>
 

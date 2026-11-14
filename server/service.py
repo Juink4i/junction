@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 import jwt
 
-from server import audit, ranking, signing, vocabulary
+from server import audit, claims, ranking, signing, vocabulary
 from server.agent_auth import AgentTokenError, check_session_token
 from server.db import transaction
 from server.mandate import BUYER_ID, MandateError, check_mandate, verify_mandate
@@ -24,6 +24,7 @@ from server.vocabulary import UNIT_WORDS, unit_code
 
 QUOTE_TTL = timedelta(minutes=15)
 CANDIDATE_LIMIT = 100  # the most products one search hands to the seller
+PROOF_SCAN = 300  # unclaimed products checked against their allergen data, per category
 MAX_QUOTE_PRODUCTS = 40  # the most products one quote request prices
 MAX_OPTIONS = 5
 MAX_ALTERNATIVES = 3
@@ -262,9 +263,14 @@ class Service:
         from_mandate = list(buyer.mandate.get("substitution", {}).get("must_keep", []))
         tags = list(dict.fromkeys(understood.tags + from_mandate))
         allowed = buyer.mandate["auto_approve"].get("allowed_categories")
+        categories = allowed if allowed is not None else [None]
         found = []
-        for category in allowed if allowed is not None else [None]:
+        for category in categories:
             found += self.catalog.search_products(understood.text, category, tags, CANDIDATE_LIMIT + 1)
+        provable = [t for t in tags if t in claims.FREE_FROM]
+        if provable:
+            found += self._proven_by_allergen_data(understood.text, categories, tags, provable,
+                                                   {p.id for p in found})
         truncated = len(found) > CANDIDATE_LIMIT
         candidates = found[:CANDIDATE_LIMIT]
 
@@ -309,6 +315,23 @@ class Service:
                               "words. A product only counts as having a property when its "
                               "supplier claims it.")
         return result
+
+    def _proven_by_allergen_data(self, text: str, categories: list, tags: list[str],
+                                 provable: list[str], seen: set[str]) -> list:
+        """Products that do not claim a free-from must-have but whose allergen data does not
+        rule it out. Proven ones first; then unknown ones, which a person checks at order time."""
+        claims_needed = [t for t in tags if t not in provable]
+        proven, unknown = [], []
+        for category in categories:
+            for p in self.catalog.search_products(text, category, claims_needed, PROOF_SCAN):
+                product = self.catalog.get_product(p.id) if p.id not in seen else None
+                if product is None:
+                    continue
+                answers = {claims.status(product, t) for t in provable}
+                if claims.NO not in answers:
+                    (proven if answers == {claims.YES} else unknown).append(p)
+                seen.add(p.id)
+        return proven + unknown
 
     @locked
     def get_product(self, product_id: str, actor: str = "agent") -> dict:

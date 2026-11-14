@@ -129,7 +129,7 @@ def test_exactly_5_times_the_usual_amount_is_not_unusual():
 
 
 def test_line_without_a_must_keep_tag_needs_a_human():
-    products = {"464201": replace(PRODUCTS["464201"], tags=[])}
+    products = {"464201": replace(PRODUCTS["464201"], tags=[], allergens_contains=["AM"])}
     decision = decide(quote(), mandate("hotel"), products, [])
     assert decision.status == "pending_approval"
     assert any("is not lactose-free" in r and "FREE_FROM" not in r for r in decision.reasons)
@@ -321,3 +321,42 @@ def test_a_cut_off_time_that_is_not_a_date_counts_as_passed():
     decision = decide(quote(unreadable), mandate("hotel"), PRODUCTS, [], now=NOW)
     assert decision.status == "pending_approval"
     assert any("cut-off" in r for r in decision.reasons)
+
+
+# A free-from must-have is proven by a claim or by the allergen data.
+
+def _eggs(**allergens):
+    egg = fake_catalog.Product(id="egg", name_en="Barn egg 30 pcs", name_fi="Kananmuna 30 kpl",
+                               category="10590", sales_unit="30 PCS", allergens_contains=["AE"],
+                               **allergens)
+    return {"egg": egg}
+
+
+def _lactose_free_school(**hard_rules):
+    m = mandate("school", **{"blocked_allergens": [], **hard_rules})  # the school blocks eggs
+    m["substitution"]["must_keep"] = ["FREE_FROM_LACTOSE"]
+    return m
+
+
+def _egg_line():
+    return {**line(units=10, covers=300.0, unit_price=4.0, content_unit="PCS"),
+            "product_id": "egg", "name": "Barn egg 30 pcs", "sales_unit": "30 PCS"}
+
+
+def test_eggs_free_from_milk_meet_a_lactose_free_rule():
+    decision = decide(quote(_egg_line()), _lactose_free_school(), _eggs(allergens_free_from=["AM"]), [])
+    assert decision.status == "confirmed", decision.reasons
+
+
+def test_eggs_that_do_not_mention_milk_go_to_a_person():
+    decision = decide(quote(_egg_line()), _lactose_free_school(), _eggs(), [])
+    assert decision.status == "pending_approval"
+    assert ["The product data does not say whether Barn egg 30 pcs is lactose-free, which the "
+            "mandate requires. Unknown is not treated as safe, so a person must check it."] == [
+        r for r in decision.reasons if "lactose-free" in r]
+
+
+def test_eggs_that_do_not_mention_milk_are_refused_when_the_mandate_refuses_unknowns():
+    decision = decide(quote(_egg_line()), _lactose_free_school(unknown_allergens="reject"), _eggs(), [])
+    assert decision.status == "rejected"
+    assert any("lactose-free" in r and "rejects" in r for r in decision.reasons)

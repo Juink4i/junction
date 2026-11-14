@@ -203,18 +203,32 @@ def test_the_enrolment_code_is_never_written_into_the_mandate_or_the_profile():
     assert not any("customer account" in text for text in texts(built(answers), "rule"))
 
 
-def test_any_of_the_21_properties_can_be_a_must_have():
+def test_only_properties_allergen_data_can_prove_are_offered_as_rules():
+    # A rule like "every product must be vegan" would rule out every egg and steak. Such
+    # properties belong on a single request, which still accepts all 21.
     from datetime import date
 
     from onboarding.build import build
     from onboarding.options import options, template
 
-    listed = options()["tags"]
-    assert len(listed) == 21
-    assert listed[0] == {"code": "FREE_FROM_LACTOSE", "name": "lactose-free"}
+    assert [t["code"] for t in options()["tags"]] == [
+        "FREE_FROM_LACTOSE", "FREE_FROM_GLUTEN", "FREE_FROM_EGGS", "FREE_FROM_SOY", "FREE_FROM_WHEAT"]
+    assert options()["tags"][0] == {"code": "FREE_FROM_LACTOSE", "name": "lactose-free"}
 
     answers = template("daycare")
-    answers["safety"]["must_be"] = ["FREE_FROM_GLUTEN", "VEGAN"]
+    answers["safety"]["must_be"] = ["FREE_FROM_GLUTEN", "FREE_FROM_LACTOSE"]
     built = build(answers, "aurinko-3f2a", date(2026, 11, 14))
-    assert built.mandate["substitution"]["must_keep"] == ["FREE_FROM_GLUTEN", "VEGAN"]
-    assert any("gluten-free and vegan" in s["text"] for s in built.sentences)
+    assert built.mandate["substitution"]["must_keep"] == ["FREE_FROM_GLUTEN", "FREE_FROM_LACTOSE"]
+    [rule] = [s["text"] for s in built.sentences if s["text"].startswith("Every product must be")]
+    assert rule == ("Every product must be gluten-free and lactose-free: the supplier says so, or "
+                    "its allergen data shows it. If the data does not say, a person must check it. "
+                    "Anything else needs a person's approval.")
+
+
+def test_a_property_allergen_data_cannot_prove_is_not_a_rule():
+    from onboarding.build import problems
+    from onboarding.options import template
+
+    answers = template("daycare")
+    answers["safety"]["must_be"] = ["VEGAN"]
+    assert any(p.startswith("Vegan cannot be a rule") and "single order" in p for p in problems(answers))

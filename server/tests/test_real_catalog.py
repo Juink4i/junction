@@ -1,5 +1,6 @@
 """The server against Runner 1's real catalog, with recorded Valio Aimo answers. No network."""
 
+from dataclasses import replace
 from datetime import date, datetime, timezone
 
 import pytest
@@ -109,3 +110,17 @@ def test_pieces_of_real_milk_get_a_question_in_litres(svc):
     asked = svc.request_quote(hotel, ["464306"], 200, "PCS", MONDAY)
     assert asked["status"] == "needs_clarification"
     assert "litres" in asked["question"]
+
+
+def test_a_lactose_free_kitchen_finds_real_eggs(svc):
+    school = svc.authenticate(issue_demo_mandates(svc.conn)["school"])
+    mandate = {**school.mandate, "substitution": {**school.mandate["substitution"],
+                                                  "must_keep": ["FREE_FROM_LACTOSE"]}}
+    found = svc.search_products(replace(school, mandate=mandate), "egg")
+    names = [p["name_en"] for p in found["products"]]
+    # Munax declares itself free from milk; Kieku's data only lists egg, so a person checks it.
+    assert any(n.startswith("Munax whole egg") for n in names)
+    assert any(n.startswith("Kieku Barn egg") for n in names)
+    assert max(i for i, n in enumerate(names) if n.startswith("Munax")) < min(
+        i for i, n in enumerate(names) if n.startswith("Kieku"))
+    assert not any("Dumle" in n for n in names)  # chocolate eggs contain milk

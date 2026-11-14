@@ -1,5 +1,7 @@
 """search_products: plain words in, the products that fit out, and what was dropped and why."""
 
+from dataclasses import replace
+
 import pytest
 
 from server import fake_catalog
@@ -223,3 +225,31 @@ def test_a_unit_the_server_cannot_count_in_gets_a_question(svc, hotel):
 
 def test_unit_words_are_understood_in_a_search(svc, hotel):
     assert svc.search_products(hotel, "lactose-free milk", amount=40, unit="litres")["status"] == "ok"
+
+
+# A free-from must-have is proven by a claim or by the allergen data.
+
+
+@pytest.fixture
+def lactose_free_kitchen(school):  # any category, every product must be lactose-free
+    mandate = {**school.mandate, "substitution": {**school.mandate["substitution"],
+                                                  "must_keep": ["FREE_FROM_LACTOSE"]}}
+    return replace(school, mandate=mandate)
+
+
+def test_eggs_are_found_for_a_lactose_free_kitchen(svc, lactose_free_kitchen):
+    found = svc.search_products(lactose_free_kitchen, "egg")
+    # Free from milk first, then the eggs whose data does not say (a person checks those at
+    # order time). The custard has milk in it.
+    assert ids(found) == ["460600", "460601"]
+    assert "hint" not in found
+
+
+def test_claimed_products_still_come_first(svc, lactose_free_kitchen):
+    assert ids(svc.search_products(lactose_free_kitchen, "milk"))[:4] == ["464201", "465039", "463038", "464179"]
+
+
+def test_a_property_allergen_data_cannot_prove_still_needs_the_claim(svc, school):
+    mandate = {**school.mandate, "substitution": {**school.mandate["substitution"],
+                                                  "must_keep": ["HIGH_PROTEIN"]}}
+    assert ids(svc.search_products(replace(school, mandate=mandate), "egg")) == []

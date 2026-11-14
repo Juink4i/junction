@@ -101,3 +101,10 @@ def test_the_server_uses_gemini_unless_told_to_use_the_keyword_rules(monkeypatch
     assert isinstance(server_app._seller(), GeminiSeller)
     monkeypatch.setenv("SELLER", "keyword")
     assert isinstance(server_app._seller(), KeywordSeller)
+
+
+def test_must_haves_stay_out_of_the_prompt():
+    # Plain code has already checked them; an egg that claims nothing must not be dropped
+    # by the AI for not saying "lactose-free".
+    candidate = Candidate("1", "Barn egg 30 pcs", "Kananmuna 30 kpl", [])
+    assert "lactose-free" not in build_prompt(NEED, [candidate], vocabulary.names)

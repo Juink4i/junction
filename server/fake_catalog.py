@@ -100,6 +100,22 @@ _PRODUCTS = {
             category="41760", sales_unit="BAG", allergens_contains=["AW"], vendor="Fake Bakery",
             country="FI", description="Wholegrain bread rolls",
         ),
+        # Eggs claim nothing. Only the allergen data can show whether they are free from milk.
+        Product(
+            id="460600", name_en="Barn egg 30 pcs", name_fi="Kananmuna 30 kpl", category="10590",
+            sales_unit="30 PCS", allergens_contains=["AE"], allergens_free_from=["AM", "AW", "AY"],
+            vendor="Fake Farm", country="FI", description="Barn eggs",
+        ),
+        Product(
+            id="460601", name_en="Free range egg 10 pcs", name_fi="Vapaan kanan muna 10 kpl",
+            category="10590", sales_unit="10 PCS", allergens_contains=["AE"], vendor="Fake Farm",
+            country="FI", description="Free range eggs",
+        ),
+        Product(
+            id="460602", name_en="Egg custard 1 kg", name_fi="Munavanukas 1 kg", category="30500",
+            sales_unit="1 KG", allergens_contains=["AE", "AM"], vendor="Fake Bakery", country="FI",
+            description="Egg custard",
+        ),
     ]
 }
 
@@ -113,6 +129,9 @@ _TERMS = {
     "460004": (1.0, "KG", 6.50, "Stock", False),
     "460000": (2.0, "KG", 9.80, "Stock", False),
     "460500": (30.0, "PCS", 7.20, "Stock", False),
+    "460600": (30.0, "PCS", 6.90, "Stock", False),
+    "460601": (10.0, "PCS", 3.40, "Stock", False),
+    "460602": (1.0, "KG", 8.50, "Stock", False),
 }
 
 

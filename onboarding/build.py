@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from onboarding.options import (ALLERGENS, CATEGORIES, MONTH_DAYS, PACK_SIZES, PERIODS, PRIORITIES,
+from onboarding.options import (ALLERGENS, CATEGORIES, MONTH_DAYS, MUST_BE, PACK_SIZES, PERIODS, PRIORITIES,
                                 TAGS, UNKNOWN_ALLERGEN_CHOICES, WEEKDAYS)
 
 RULE, PREFERENCE = "rule", "preference"
@@ -65,6 +65,10 @@ def problems(answers: dict[str, Any]) -> list[str]:
         unknown = _unknown(values, known)
         if unknown:
             found.append(f"Unknown {word}: {', '.join(unknown)}.")
+    for tag in safety.get("must_be") or []:
+        if tag in TAGS and tag not in MUST_BE:
+            found.append(f"{TAGS[tag].capitalize()} cannot be a rule for every product. Ask for "
+                         "it on a single order instead.")
     if safety.get("unknown_allergens", "human") not in UNKNOWN_ALLERGEN_CHOICES:
         found.append("For a product without allergen information, choose: a person checks it, "
                      "or refuse it.")
@@ -215,7 +219,9 @@ def build(answers: dict[str, Any], buyer_id: str, today: date,
     else:
         say(RULE, f"If a product has no allergen information at all, {then}")
     if must_be:
-        say(RULE, f"Every product must be {_and([TAGS[t] for t in must_be])}. "
+        unproven = "a person must check it" if unknown == "human" else "it is refused"
+        say(RULE, f"Every product must be {_and([TAGS[t] for t in must_be])}: the supplier says "
+                  f"so, or its allergen data shows it. If the data does not say, {unproven}. "
                   "Anything else needs a person's approval.")
     say(RULE, f"The agent may buy only: {', '.join(CATEGORIES[c] for c in categories)}."
         if categories else "The agent may buy from any product category.")

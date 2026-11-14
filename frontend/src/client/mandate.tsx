@@ -48,19 +48,14 @@ function Rules({ m, profile, opts }: { m: Mandate; profile: Profile | null; opts
       <Rule icon={<Tags className="size-4" />} title="Allowed categories">
         {m.auto_approve.allowed_categories?.length ? m.auto_approve.allowed_categories.map(categoryName).join(', ') : 'Any category.'}
       </Rule>
+      {m.substitution.must_keep.length > 0 && (
+        <Rule icon={<BadgeCheck className="size-4" />} title="Every product must be">
+          <TagChips tags={m.substitution.must_keep} />
+          <span className="block text-xs">The supplier says so, or its allergen data shows it. If the data doesn’t say, it is treated like missing allergen info.</span>
+        </Rule>
+      )}
       <Rule icon={<Repeat className="size-4" />} title="Substitutes">
-        {m.substitution.allowed ? (
-          <span className="inline-flex flex-wrap items-center gap-1">
-            Allowed, at most {m.substitution.max_price_increase_pct}% more per litre
-            {m.substitution.must_keep.length > 0 && (
-              <>
-                , and must stay <TagChips tags={m.substitution.must_keep} />
-              </>
-            )}
-          </span>
-        ) : (
-          'Not allowed.'
-        )}
+        {m.substitution.allowed ? `Allowed, at most ${m.substitution.max_price_increase_pct}% more per litre.` : 'Not allowed.'}
       </Rule>
       <Rule icon={<Ban className="size-4" />} title="Never buy (allergens)">
         {m.hard_rules.blocked_allergens.length ? <AllergenChips codes={m.hard_rules.blocked_allergens} tone="stop" /> : 'Nothing blocked.'}
@@ -185,16 +180,15 @@ function Editor({ account, m, profile, opts, onDone }: { account: Account; m: Ma
           Allow substitutes when something runs out
         </label>
         {d.subsAllowed && (
-          <>
-            <Field label="May cost up to (% more per litre)">
-              <Input className="max-w-32" type="number" min={0} max={100} value={d.subsPct} onChange={(e) => set('subsPct', e.target.value)} aria-label="Substitute price increase" />
-            </Field>
-            <Field label="Every product must be">
-              <Chips items={withHeld(opts.tags, d.mustKeep, tagName)} chosen={d.mustKeep} onChange={(v) => set('mustKeep', v)} />
-            </Field>
-          </>
+          <Field label="May cost up to (% more per litre)">
+            <Input className="max-w-32" type="number" min={0} max={100} value={d.subsPct} onChange={(e) => set('subsPct', e.target.value)} aria-label="Substitute price increase" />
+          </Field>
         )}
       </div>
+
+      <Field label="Every product must be" hint="The supplier says so, or its allergen data shows it. If the data doesn’t say, it follows the missing-allergen setting below. Other properties, like vegan, go on a single order.">
+        <Chips items={withHeld(opts.tags, d.mustKeep, tagName)} chosen={d.mustKeep} onChange={(v) => set('mustKeep', v)} />
+      </Field>
 
       <Field label="Never buy anything containing">
         <Chips tone="stop" items={withHeld(opts.allergens, d.blocked, allergenName)} chosen={d.blocked} onChange={(v) => set('blocked', v)} />

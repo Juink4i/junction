@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 from statistics import median
 
 from catalog.names import tag_name
+from server.claims import NO, UNKNOWN, status
 
 UNUSUAL_FACTOR = 5
 PERIOD_WORDS = {"week": ("this week's", "weekly"), "month": ("this month's", "monthly")}
@@ -41,6 +42,12 @@ def _unknown_blocked(product, blocked: set[str]) -> list[str]:
     return sorted(blocked - listed)
 
 
+def _must_keep(product, mandate: dict, answer: str) -> list[str]:
+    """The mandate's must-have properties whose check gives this answer, in plain words."""
+    return [tag_name(t) for t in mandate.get("substitution", {}).get("must_keep", [])
+            if status(product, t) == answer]
+
+
 def hard_stops(quote: dict, mandate: dict, products: dict) -> list[str]:
     allowed = mandate["auto_approve"].get("allowed_categories")
     rules = mandate["hard_rules"]
@@ -68,6 +75,10 @@ def hard_stops(quote: dict, mandate: dict, products: dict) -> list[str]:
                 reasons.append(f"{line['name']} has no allergen information, and the mandate rejects such products.")
             elif unknown:
                 reasons.append(f"Whether {line['name']} contains {', '.join(unknown)} is unknown, "
+                               "and the mandate rejects such products.")
+            unproven = _must_keep(product, mandate, UNKNOWN)
+            if unproven:
+                reasons.append(f"Whether {line['name']} is {', '.join(unproven)} is unknown, "
                                "and the mandate rejects such products.")
     return reasons
 
@@ -113,7 +124,6 @@ def _needs_human(quote: dict, mandate: dict, products: dict, spent_in_period: fl
                  now: datetime | None = None) -> list[str]:
     limits = mandate["auto_approve"]
     rules = mandate["hard_rules"]
-    must_keep = mandate.get("substitution", {}).get("must_keep", [])
     reasons = []
     max_order = limits.get("max_order_eur")
     if max_order is not None and quote["total_eur"] > max_order:
@@ -161,9 +171,14 @@ def _needs_human(quote: dict, mandate: dict, products: dict, spent_in_period: fl
                 reasons.append(f"The product data does not say whether {line['name']} contains "
                                f"{', '.join(unknown)}, which the mandate blocks. Unknown is not "
                                "treated as safe, so a person must check it.")
-        missing = [tag_name(t) for t in must_keep if t not in product.tags]
+        missing = _must_keep(product, mandate, NO)
         if missing:
             reasons.append(f"{line['name']} is not {', '.join(missing)}, which the mandate requires.")
+        unproven = _must_keep(product, mandate, UNKNOWN)
+        if unproven and rules.get("unknown_allergens", "human") == "human":
+            reasons.append(f"The product data does not say whether {line['name']} is "
+                           f"{', '.join(unproven)}, which the mandate requires. Unknown is not "
+                           "treated as safe, so a person must check it.")
     return reasons
 
 
