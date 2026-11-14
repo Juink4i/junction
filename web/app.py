@@ -37,12 +37,17 @@ from starlette.responses import (FileResponse, JSONResponse, PlainTextResponse, 
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from agent.identity import ensure_agent_key
+from onboarding.build import build, new_buyer_id, problems
+from onboarding.enroll import BUYERS_DIR, EnrollError, enroll
+from onboarding.options import options as onboarding_options
 from server.db import STATE_DB
 from web import accounts, admin, mandate_edit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).parent / "static"
-PAGES = {"/": "stage.html", "/approvals": "approvals.html", "/log": "log.html", "/chat": "chat.html"}
+PAGES = {"/": "stage.html", "/approvals": "approvals.html", "/log": "log.html", "/chat": "chat.html",
+         "/onboarding": "onboarding.html"}
 MANDATE_DIR = REPO_ROOT / "server" / "mandates"
 BUYER_KEYS_DIR = REPO_ROOT / "data" / "buyer_keys"
 FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
@@ -112,14 +117,16 @@ def _frame(event: dict[str, Any]) -> str:
     return f"id: {event['id']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
-def create_app(trade_http: str | None = None, state_db: str | Path | None = None,
-               mandate_dir: str | Path | None = None, catalog: Any = None,
-               frontend_dist: str | Path | None = None,
+def create_app(trade_http: str | None = None, buyers_dir: Path | None = None, *,
+               state_db: str | Path | None = None, mandate_dir: str | Path | None = None,
+               catalog: Any = None, frontend_dist: str | Path | None = None,
                buyer_keys_dir: str | Path | None = None) -> Starlette:
     trade = (trade_http or os.environ.get("TRADE_HTTP_URL", "http://localhost:8000")).rstrip("/")
+    buyers = Path(buyers_dir) if buyers_dir is not None else BUYERS_DIR
     hub = EventHub()
     state_path = Path(state_db) if state_db is not None else STATE_DB
-    mandates = Path(mandate_dir) if mandate_dir is not None else MANDATE_DIR
+    mandates = accounts.MandateFiles(Path(mandate_dir) if mandate_dir is not None else MANDATE_DIR,
+                                     buyers)
     buyer_keys = Path(buyer_keys_dir) if buyer_keys_dir is not None else BUYER_KEYS_DIR
     mandate_lock = threading.Lock()  # one mandate edit at a time, so versions never collide
     dist = (Path(frontend_dist) if frontend_dist is not None else FRONTEND_DIST).resolve()
@@ -242,6 +249,53 @@ def create_app(trade_http: str | None = None, state_db: str | Path | None = None
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
+    async def read_answers(request: Request) -> dict | None:
+        try:
+            answers = await request.json()
+        except ValueError:
+            return None
+        return answers if isinstance(answers, dict) else None
+
+    def bad_answers(message: str) -> JSONResponse:
+        return JSONResponse({"code": "bad_answers", "message": message, "retryable": False}, 400)
+
+    async def onboarding_opts(_: Request) -> JSONResponse:
+        return JSONResponse(onboarding_options())
+
+    async def onboarding_preview(request: Request) -> JSONResponse:
+        answers = await read_answers(request)
+        if answers is None:
+            return bad_answers("Send the answers as a JSON object.")
+        found = problems(answers)
+        sentences = [] if found else build(answers, "preview", date.today(),
+                                           agent_public_pem="preview").sentences
+        return JSONResponse({"problems": found, "sentences": sentences})
+
+    async def onboarding_submit(request: Request) -> JSONResponse:
+        answers = await read_answers(request)
+        if answers is None:
+            return bad_answers("Send the answers as a JSON object.")
+        found = problems(answers)
+        if found:
+            return bad_answers(" ".join(found))
+        buyer_id = new_buyer_id(answers["kitchen"]["name"])
+        try:
+            agent_pem = await run_in_threadpool(ensure_agent_key, buyer_id, buyers)
+            built = await run_in_threadpool(enroll, answers, buyer_id, agent_pem, trade,
+                                            buyers_dir=buyers)
+        except EnrollError as exc:
+            status = {"server_unreachable": 502, "buyer_exists": 409}.get(exc.code, 400)
+            return JSONResponse({"code": exc.code, "message": exc.message,
+                                 "retryable": exc.retryable}, status)
+        except OSError as exc:
+            return JSONResponse({"code": "save_failed", "retryable": False,
+                                 "message": "The kitchen's files could not be saved "
+                                            f"({type(exc).__name__}). Sign up again."}, 500)
+        name = built.profile["name"]
+        hub.publish({"kind": "onboarded", "buyer": buyer_id, "buyer_name": name,
+                     "sentences": built.sentences})
+        return JSONResponse({"buyer_id": buyer_id, "name": name, "sentences": built.sentences}, 201)
+
     async def info(request: Request) -> JSONResponse:
         return JSONResponse({"trade_http": trade, "phone_url": os.environ.get("PHONE_URL"),
                              "active_buyer": hub.active_buyer})
@@ -304,10 +358,10 @@ def create_app(trade_http: str | None = None, state_db: str | Path | None = None
         try:
             with mandate_lock:
                 changed = mandate_edit.update_mandate(
-                    buyer_id=buyer_id, buyer_name=name, change=change, mandate_dir=mandates,
+                    buyer_id=buyer_id, buyer_name=name, change=change, files=mandates,
                     keys_dir=buyer_keys, state_db=state_path, today=today)
         except mandate_edit.EditError as e:
-            return _error(e.code, str(e), 400)
+            return _error(e.code, str(e), 409 if e.code == "key_mismatch" else 400)
         except sqlite3.OperationalError:
             return _error("state_db_unavailable", "The mandate was signed, but the trade server's "
                           "database is busy. Try again.", 503, retryable=True)
@@ -400,6 +454,9 @@ def create_app(trade_http: str | None = None, state_db: str | Path | None = None
         Route("/api/events", events_post, methods=["POST"]),
         Route("/api/events/clear", events_clear, methods=["POST"]),
         Route("/api/events/stream", events_stream),
+        Route("/api/onboarding/options", onboarding_opts),
+        Route("/api/onboarding/preview", onboarding_preview, methods=["POST"]),
+        Route("/api/onboarding", onboarding_submit, methods=["POST"]),
         Route("/api/info", info),
         Mount("/static", StaticFiles(directory=STATIC), name="static"),
     ]

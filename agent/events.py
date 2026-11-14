@@ -2,7 +2,7 @@
 
 Events are small JSON objects: {"kind": ..., "ts": ..., "run_id": ..., ...}. Kinds:
 run_start, user, request, agent, tool_call, tool_result, options, ask, answer, waiting,
-decision, run_end, scene, verify, note.
+decision, run_end, scene, verify, note, onboarded.
 
 Posting to the web server happens on a background thread and never blocks or fails the
 agent: if the web page isn't running, events still go to the terminal.
@@ -162,6 +162,11 @@ def format_event(e: dict[str, Any]) -> str | None:
         return f"   {icon} Server decision: {e.get('status')}"
     if k == "verify":
         return "\n🔒 Verify log: " + ("✅ intact" if e.get("ok") else f"❌ broken at row {e.get('broken_at_seq')}")
+    if k == "onboarded":
+        sentences = e.get("sentences", [])
+        rules = sum(1 for s in sentences if s.get("kind") == "rule")
+        return (f"\n🖊 {e.get('buyer_name')} signed its mandate: {rules} rules for the server, "
+                f"{len(sentences) - rules} preferences for its agent.")
     if k == "note":
         return f"   ℹ {e.get('text')}"
     if k == "run_end":

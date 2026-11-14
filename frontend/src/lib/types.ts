@@ -19,6 +19,11 @@ export interface Mandate {
   substitution: { allowed: boolean; must_keep: string[]; max_price_increase_pct: number }
   hard_rules: { blocked_allergens: string[]; unknown_allergens: string; no_delivery_after?: string }
   approvers: string[]
+  // From onboarding (kitchens that signed up themselves):
+  budget?: { period: string; max_eur: number } | null
+  delivery?: { days: string[] | null } | null
+  usual_orders?: { category: string; amount: number; content_unit: string; every: string }[]
+  agent_key?: string
 }
 
 export interface Account {
@@ -131,6 +136,8 @@ export interface MandateChanges {
   auto_approve?: { max_order_eur?: number; max_line_eur?: number; allowed_categories?: string[] | null }
   substitution?: { allowed?: boolean; must_keep?: string[]; max_price_increase_pct?: number }
   hard_rules?: { blocked_allergens?: string[]; unknown_allergens?: string }
+  budget?: { period?: string; max_eur?: number } | null
+  delivery?: { days: string[] | null } | null
   approvers?: string[]
   valid_until?: string
 }

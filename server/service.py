@@ -10,10 +10,12 @@ import threading
 from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
+import jwt
+
 from server import audit, signing
 from server.db import transaction
-from server.mandate import MandateError, verify_mandate
-from server.policy import decide, eur
+from server.mandate import BUYER_ID, MandateError, check_mandate, verify_mandate
+from server.policy import decide, eur, period_start
 from server.unusual import MODEL, REASON_PREFIX, THRESHOLD, flag_reason
 
 QUOTE_TTL = timedelta(minutes=15)
@@ -53,9 +55,10 @@ def locked(method):
 
 class Service:
     def __init__(self, conn: sqlite3.Connection, catalog: Any, now: Callable[[], datetime],
-                 unusual_scorer: Any = None):
+                 unusual_scorer: Any = None, require_enrolment_code: bool = False):
         self.conn = conn
         self.unusual_scorer = unusual_scorer
+        self.require_enrolment_code = require_enrolment_code
         self.catalog = catalog
         self.now = now
         self.key = signing.server_key(conn)
@@ -64,6 +67,73 @@ class Service:
     def _log(self, actor: str, action: str, reason: str, order_id: str | None = None,
              quote_id: str | None = None) -> None:
         audit.append(self.conn, self.now(), actor, action, reason, order_id, quote_id)
+
+    # Buyers
+
+    @locked
+    def register_buyer(self, public_pem: Any, mandate_token: Any,
+                       enrolment_code: Any = None) -> tuple[int, dict]:
+        """A kitchen registers its signing key and its signed mandate. Returns (HTTP status, body).
+
+        Plain HTTP only, never an MCP tool: an agent must not be able to register a mandate.
+        With require_enrolment_code, the registration must carry the code Valio Aimo shows that
+        customer, which ties the key to a customer Valio Aimo already knows.
+        """
+        if not (isinstance(public_pem, str) and public_pem
+                and isinstance(mandate_token, str) and mandate_token):
+            return 400, error("bad_request", "Send public_pem and mandate_token as text.")
+        customer = None
+        if self.require_enrolment_code:
+            customer = self.conn.execute(
+                "SELECT customer_no, name FROM customers WHERE enrolment_code = ?",
+                (enrolment_code if isinstance(enrolment_code, str) else "",)).fetchone()
+            if customer is None:
+                self._log("unknown", "register_buyer:refused",
+                          "Someone tried to register a buyer without a valid Valio Aimo enrolment code.")
+                return 403, error("enrolment_code_invalid", "This enrolment code is not known to "
+                                  "Valio Aimo. Find yours in your Valio Aimo webshop account.")
+        try:
+            buyer_id = jwt.get_unverified_header(mandate_token).get("kid")
+        except jwt.InvalidTokenError:
+            buyer_id = None
+        if not (isinstance(buyer_id, str) and BUYER_ID.fullmatch(buyer_id)):
+            return 400, error("mandate_invalid", "The mandate token must carry a buyer id of 3 to 64 "
+                              "lowercase letters, digits or hyphens.")
+        if self.conn.execute("SELECT 1 FROM buyers WHERE buyer_id = ?", (buyer_id,)).fetchone():
+            self._log("unknown", "register_buyer:refused",
+                      f"Someone tried to register buyer id {buyer_id}, which is already registered.")
+            return 409, error("buyer_exists", f"A buyer with id {buyer_id} is already registered.")
+        if not signing.is_ed25519_public(public_pem):
+            return 400, error("bad_key", "public_pem is not an Ed25519 public key.")
+        now = self.now()
+        try:
+            mandate = check_mandate(mandate_token, signing.load_public(public_pem), now.date())
+        except MandateError as e:
+            return 400, error("mandate_invalid", str(e))
+
+        usual = mandate.get("usual_orders", [])
+        name = customer["name"] if customer else mandate["buyer"]
+        with transaction(self.conn):
+            self.conn.execute("INSERT INTO buyers (buyer_id, name, public_pem) VALUES (?, ?, ?)",
+                              (buyer_id, name, public_pem))
+            self.conn.executemany(
+                "INSERT INTO order_history (buyer_id, category, amount, content_unit, ordered_on) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [(buyer_id, o["category"], o["amount"], o["content_unit"], now.date().isoformat())
+                 for o in usual])
+        declared = "; ".join(f"{o['amount']:g} {o['content_unit']} of category {o['category']} "
+                             f"each {o['every']}" for o in usual)
+        known_as = (f" Its enrolment code ties it to Valio Aimo customer {customer['customer_no']} "
+                    f"({customer['name']})." if customer else "")
+        self._log(mandate["buyer"], "register_buyer",
+                  f"{mandate['buyer']} registered its signing key and mandate "
+                  f"{mandate['mandate_id']} as buyer {buyer_id}. "
+                  + (f"Declared usual orders: {declared}." if declared else "No usual orders declared.")
+                  + known_as)
+        body = {"buyer_id": buyer_id, "mandate_id": mandate["mandate_id"], "status": "registered"}
+        if customer:
+            body["customer_no"] = customer["customer_no"]
+        return 201, body
 
     # Search and details: static data only.
 
@@ -212,8 +282,8 @@ class Service:
 
     @locked
     def place_order(self, quote_id: str, mandate_token: str, rationale: str,
-                    confirm_unusual: bool = False) -> dict:
-        return self._place_order(quote_id, mandate_token, rationale, confirm_unusual)
+                    confirm_unusual: bool = False, agent_signature: str | None = None) -> dict:
+        return self._place_order(quote_id, mandate_token, rationale, confirm_unusual, agent_signature)
 
     def _refuse(self, quote_id: str, reason: str) -> dict:
         """A refusal that is not tied to an order, so it cannot use up someone's quote."""
@@ -235,7 +305,7 @@ class Service:
         return self.conn.execute(f"SELECT * FROM orders WHERE {column} = ?", (value,)).fetchone()
 
     def _place_order(self, quote_id: str, mandate_token: str, rationale: str,
-                     confirm_unusual: bool) -> dict:
+                     confirm_unusual: bool, agent_signature: str | None = None) -> dict:
         now = self.now()
         try:
             buyer_id, mandate = verify_mandate(mandate_token, self.conn, now.date())
@@ -244,10 +314,19 @@ class Service:
                       "valid mandate.")
             return self._refuse(quote_id, f"The mandate was not accepted. {e}")
         actor = str(mandate["agent_id"])
+        signed_by_agent = "agent_key" in mandate
+        if signed_by_agent:
+            problem = signing.order_signature_problem(agent_signature, mandate, quote_id, confirm_unusual)
+            if problem:
+                self._log("unknown agent", "place_order",
+                          f"Asked to order quote {quote_id} for {mandate['buyer']} with a copy of its "
+                          "mandate, but without a valid signature from its agent.")
+                return self._refuse(quote_id, problem)
         quote_row = self.conn.execute("SELECT * FROM quotes WHERE quote_id = ?", (quote_id,)).fetchone()
         self._log(actor, "place_order",
                   f"Asked to order quote {quote_id} for {mandate['buyer']}"
                   f"{' and confirmed the unusual amount' if confirm_unusual else ''}. "
+                  f"{'The order is signed by the agent key named in the mandate. ' if signed_by_agent else ''}"
                   f"The agent's reason: \"{rationale[:500]}\"",
                   quote_id=quote_id if quote_row else None)
 
@@ -277,7 +356,8 @@ class Service:
         else:
             ai_unusual = self._ai_unusual(mandate["buyer"], history, quote, products, quote_id)
         decision = decide({**quote, "need_by": need_by.isoformat()}, mandate, products, history,
-                          confirm_unusual, ai_unusual)
+                          confirm_unusual, ai_unusual,
+                          self._spent_in_period(buyer_id, mandate, now, quote_id))
 
         order_id = existing["order_id"] if existing else _new_id("ord")
         approval_id = _new_id("apr") if decision.status == "pending_approval" else None
@@ -300,6 +380,18 @@ class Service:
         self._log("policy", f"decision:{decision.status}", " ".join(decision.reasons),
                   order_id=order_id, quote_id=quote_id)
         return self._order_result(self._order(order_id=order_id))
+
+    def _spent_in_period(self, buyer_id: str, mandate: dict, now: datetime, quote_id: str) -> float:
+        """What this buyer's other live orders in the current budget period add up to, in euros."""
+        budget = mandate.get("budget")
+        if not budget:
+            return 0.0
+        rows = self.conn.execute(
+            "SELECT q.body_json FROM orders o JOIN quotes q USING (quote_id) "
+            "WHERE o.buyer_id = ? AND o.quote_id != ? AND o.created_at >= ? "
+            "AND o.status IN ('confirmed', 'pending_approval')",
+            (buyer_id, quote_id, period_start(budget["period"], now).isoformat()))
+        return round(sum(json.loads(row["body_json"])["total_eur"] for row in rows), 2)
 
     def _ai_unusual(self, buyer: str, history: list[dict], quote: dict, products: dict,
                     quote_id: str) -> str | None:

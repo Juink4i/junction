@@ -15,6 +15,11 @@ CREATE TABLE IF NOT EXISTS buyers (
     name TEXT NOT NULL,
     public_pem TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS customers (
+    customer_no TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    enrolment_code TEXT NOT NULL UNIQUE
+);
 CREATE TABLE IF NOT EXISTS order_history (
     buyer_id TEXT NOT NULL,
     category TEXT NOT NULL,

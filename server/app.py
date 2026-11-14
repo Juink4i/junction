@@ -41,7 +41,8 @@ def service() -> Service:
     global _service
     if _service is None:
         scorer = None if os.environ.get("DECISIONS_API") == "off" else DecisionsScorer()
-        _service = Service(connect(), load_catalog(), lambda: datetime.now(timezone.utc), scorer)
+        _service = Service(connect(), load_catalog(), lambda: datetime.now(timezone.utc), scorer,
+                           require_enrolment_code=os.environ.get("ENROLMENT_CODES") == "on")
     return _service
 
 
@@ -96,14 +97,18 @@ def request_quote(ctx: Context, lines: list[QuoteLineRequest], need_by: date) ->
 
 @mcp.tool()
 def place_order(quote_id: str, mandate_token: str, rationale: str,
-                confirm_unusual: bool = False) -> dict[str, Any]:
+                confirm_unusual: bool = False, agent_signature: str | None = None) -> dict[str, Any]:
     """Place the order for a quote, using the buyer's signed mandate.
 
     Returns one status: confirmed, needs_clarification, pending_approval or rejected,
     always with plain-language reasons. Calling again with the same quote_id returns the
     same order.
+
+    agent_signature is the agent's own signature over this order (quote_id, mandate_id,
+    confirm_unusual). It is required when the mandate names an agent key, so a copy of the
+    mandate alone cannot place orders.
     """
-    return service().place_order(quote_id, mandate_token, rationale, confirm_unusual)
+    return service().place_order(quote_id, mandate_token, rationale, confirm_unusual, agent_signature)
 
 
 @mcp.tool()
@@ -117,6 +122,20 @@ def get_audit_log(ctx: Context, order_id: str | None = None,
                   quote_id: str | None = None) -> list[dict[str, Any]] | dict[str, Any]:
     """The plain-language decision trail for one order or quote. Give one of the two ids."""
     return service().get_audit_log(order_id, quote_id, actor=_actor(ctx))
+
+
+@mcp.custom_route("/buyers", methods=["POST"])
+async def register_buyer(request: Request) -> JSONResponse:
+    """A kitchen registers its public key and signed mandate. Not an MCP tool, on purpose."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        body = {}
+    status, result = service().register_buyer(body.get("public_pem"), body.get("mandate_token"),
+                                              body.get("enrolment_code"))
+    return JSONResponse(result, status_code=status)
 
 
 @mcp.custom_route("/approvals", methods=["GET"])

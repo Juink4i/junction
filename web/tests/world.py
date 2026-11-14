@@ -7,6 +7,9 @@ import httpx
 import pytest
 from starlette.testclient import TestClient
 
+from agent.identity import ensure_agent_key, key_path, sign_order
+from onboarding.enroll import enroll
+from onboarding.options import WEEKDAYS, template
 from server import fake_catalog
 from server.db import connect
 from server.make_mandate import issue_demo_mandates
@@ -14,6 +17,8 @@ from server.service import Service
 from web.app import create_app
 
 NEED_BY = (date.today() + timedelta(days=3)).isoformat()
+KID = "aurinko-3f2a"   # Päiväkoti Aurinko: onboarded, with an agent key and one order
+SOINTU = "sointu-0001"  # Café Sointu: onboarded, no agent key, no orders
 
 
 class Trade:
@@ -54,6 +59,28 @@ def world(tmp_path):
     assert cafe_ok["status"] == "confirmed"
     assert cafe_wait["status"] == "pending_approval"
 
+    # Two kitchens signed up through onboarding: files in buyers/<id>/, not in mandates/.
+    buyers = tmp_path / "buyers"
+
+    class Register:  # enroll() posts to the trade server's /buyers; answer from the temp DB
+        def post(self, url, json):
+            status, body = svc.register_buyer(json["public_pem"], json["mandate_token"],
+                                              json.get("enrolment_code"))
+            return httpx.Response(status, json=body)
+
+    daycare = template("daycare")
+    daycare["safety"]["blocked_allergens"] = []
+    daycare["delivery"]["days"] = list(WEEKDAYS)  # so the test order is not held for its weekday
+    agent_pem = ensure_agent_key(KID, buyers)
+    enroll(daycare, KID, agent_pem, "http://trade.test", buyers_dir=buyers, client=Register())
+    enroll(template("cafe"), SOINTU, None, "http://trade.test", buyers_dir=buyers, client=Register())
+    kid_token = (buyers / KID / "mandate.jwt").read_text()
+    q = svc.request_quote([{"product_id": "464201", "amount": 40, "unit": "L"}], NEED_BY)
+    signature = sign_order(key_path(KID, buyers), kid_token, q["quote_id"], False)
+    kid = {**svc.place_order(q["quote_id"], kid_token, "weekly milk", agent_signature=signature),
+           "quote_id": q["quote_id"]}
+    assert kid["status"] == "confirmed", kid
+
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)
     (dist / "index.html").write_text("<html>SPA shell</html>")
@@ -67,6 +94,7 @@ def world(tmp_path):
     w.hotel, w.cafe_ok, w.cafe_wait = hotel, cafe_ok, cafe_wait
     w.state_db, w.mandates, w.dist = tmp_path / "state.db", mandates, dist
     w.keys = tmp_path / "buyer_keys"
+    w.buyers, w.kid = buyers, kid
     w.trade = Trade(svc)
     yield w
     conn.close()
@@ -76,7 +104,7 @@ def world(tmp_path):
 def client(world):
     app = create_app(trade_http="http://trade.test", state_db=world.state_db,
                      mandate_dir=world.mandates, catalog=fake_catalog, frontend_dist=world.dist,
-                     buyer_keys_dir=world.keys)
+                     buyer_keys_dir=world.keys, buyers_dir=world.buyers)
     with TestClient(app) as c:
         real = c.app.state.http
         c.app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(world.trade))

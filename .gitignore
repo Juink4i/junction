@@ -6,3 +6,5 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 data/buyer_keys/
+.gstack/
+data/buyers/

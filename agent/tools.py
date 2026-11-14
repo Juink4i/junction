@@ -2,7 +2,8 @@
 
 Six of them are the trade server's MCP tools (Contract B), with two changes made in code
 rather than left to the AI:
-- place_order attaches the buyer's signed mandate. The AI never sees or chooses it.
+- place_order attaches the buyer's signed mandate, and signs the order with the agent's own
+  key when it has one. The AI never sees or chooses either.
 - get_approval_status keeps checking until a person decides, or the wait runs out.
 
 Three are local and only make the agent's work visible: record_request, present_options
@@ -21,10 +22,12 @@ from pydantic import BaseModel, Field
 
 from agent.config import Settings
 from agent.events import EventSink
+from agent.identity import sign_order
 from agent.mcp_link import TradeLink
 
 AskFn = Callable[[str], Awaitable[str | None]]
 MANDATE_SHOWN_AS = "[signed mandate attached]"
+SIGNATURE_SHOWN_AS = "[signed by the agent's key]"
 
 
 class QuoteLine(BaseModel):
@@ -175,6 +178,10 @@ class Toolbox:
             args = {"quote_id": quote_id, "mandate_token": box.settings.mandate_token,
                     "rationale": rationale, "confirm_unusual": confirm_unusual}
             shown = args | {"mandate_token": MANDATE_SHOWN_AS}
+            if box.settings.agent_key_file:
+                args["agent_signature"] = sign_order(box.settings.agent_key_file,
+                                                     box.settings.mandate_token, quote_id, confirm_unusual)
+                shown["agent_signature"] = SIGNATURE_SHOWN_AS
             result = await box._call("place_order", args, shown)
             if isinstance(result, dict) and "status" in result:
                 box.orders.append(result)

@@ -1,9 +1,18 @@
 """The buyer edits its own mandate. web/ acts as the buyer's signing tool.
 
 A change is merged into the current mandate, checked, given the next version number,
-signed with the buyer's own key and written to server/mandates/<buyer_id>.jwt. Then the
-buyer's public key and a "mandate:updated" log row go into state.db. Those two are the
-only writes web/ ever makes to state.db; they are all in register() below.
+signed with the buyer's own key and written back to the file it came from (see
+web.accounts.MandateFiles), so the agent picks it up on its next run. Every field the
+editor does not touch (agent_key, usual_orders, no_delivery_after, ...) stays as it was.
+
+Keys: a kitchen that signed up on the onboarding page keeps its key in
+data/buyers/<id>/buyer_key.pem, which Valio Aimo already knows, so it is never rotated.
+The demo buyers' keys were thrown away by server.make_mandate, so the first edit makes one
+in data/buyer_keys/<id>.pem and registers its public half.
+
+Then the buyer's public key (demo buyers, first edit only) and a "mandate:updated" log row
+go into state.db. Those two are the only writes web/ ever makes to state.db; they are all
+in register() below.
 """
 
 from __future__ import annotations
@@ -12,6 +21,7 @@ import copy
 import math
 import os
 import re
+import sqlite3
 import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -22,19 +32,23 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from server import audit, signing
 from server.db import connect, transaction
-from server.mandate import UNKNOWN_ALLERGEN_RULES, _shape_problems
-from server.policy import eur
-from web.accounts import decode_unverified, read_token
+from server.mandate import UNKNOWN_ALLERGEN_RULES, WEEKDAYS, _shape_problems
+from server.policy import WEEKDAY_NAMES, eur
+from web.accounts import MandateFiles, decode_unverified, open_ro
 
-# What a buyer may change. Everything else (mandate_id, buyer, agent_id, no_delivery_after)
-# stays as it was signed.
+# What a buyer may change. Everything else (mandate_id, buyer, agent_id, agent_key,
+# usual_orders, no_delivery_after) stays as it was signed.
 EDITABLE = {
     "auto_approve": {"max_order_eur", "max_line_eur", "allowed_categories"},
     "substitution": {"allowed", "must_keep", "max_price_increase_pct"},
     "hard_rules": {"blocked_allergens", "unknown_allergens"},
+    "budget": {"period", "max_eur"},
+    "delivery": {"days"},
     "approvers": None,
     "valid_until": None,
 }
+# Sections that null removes: no budget cap, goods may arrive any day.
+REMOVABLE = {"budget", "delivery"}
 
 
 class EditError(Exception):
@@ -58,6 +72,9 @@ def merge(current: dict, change: Any) -> dict:
         if fields is None:
             new[key] = value
             continue
+        if value is None and key in REMOVABLE:
+            new.pop(key, None)
+            continue
         if not isinstance(value, dict):
             raise EditError("bad_field", f"{key} must be an object with the fields to change.")
         section = new.setdefault(key, {})
@@ -68,9 +85,19 @@ def merge(current: dict, change: Any) -> dict:
                 raise EditError("bad_field", f"{key}.{field} cannot be changed here.")
             if key == "auto_approve" and field == "allowed_categories" and not field_value:
                 section.pop(field, None)  # no list means any category
+            elif key == "delivery" and field == "days" and not field_value:
+                section.pop(field, None)  # no days means any day
+            elif key == "delivery" and field == "days" and _weekdays(field_value):
+                section[field] = [d for d in WEEKDAYS if d in field_value]  # Monday first, no repeats
             else:
                 section[field] = field_value
+    if new.get("delivery") == {}:
+        new.pop("delivery")
     return new
+
+
+def _weekdays(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(d, str) and d in WEEKDAYS for d in value)
 
 
 def _number(value: Any) -> bool:
@@ -109,6 +136,12 @@ def problems(mandate: dict, today: date) -> list[str]:
     else:
         if valid_until < today:
             found.append(f"valid_until {valid_until.isoformat()} is in the past")
+
+    budget = mandate.get("budget") if isinstance(mandate.get("budget"), dict) else {}
+    if _number(budget.get("max_eur")) and _number(order) and budget["max_eur"] < order:
+        # Same rule as onboarding.build.problems.
+        found.append(f"the budget ({eur(budget['max_eur'])} per {budget.get('period')}) cannot be "
+                     f"less than the limit per order ({eur(order)})")
 
     if not mandate.get("approvers"):
         found.append("approvers needs at least one approver")
@@ -151,6 +184,11 @@ FIELDS = [  # (section, field, label, how to show the value)
     ("hard_rules", "blocked_allergens", "blocked allergens", lambda v: _list(v)),
     ("hard_rules", "unknown_allergens", "unknown allergens",
      lambda v: UNKNOWN_WORDS.get(v, str(v))),
+    (None, "budget", "budget", lambda v: (f"{eur(v['max_eur'])} per {v['period']}"
+                                          if isinstance(v, dict) and _number(v.get("max_eur"))
+                                          else "none")),
+    ("delivery", "days", "delivery days",
+     lambda v: _list(v, lambda d: WEEKDAY_NAMES.get(d, str(d)), empty="any day")),
     (None, "approvers", "approvers", lambda v: _list(v)),
     (None, "valid_until", "valid until", lambda v: str(v)),
 ]
@@ -172,14 +210,27 @@ def changes(old: dict, new: dict) -> list[str]:
 # Keys and files
 
 
+def _load_key(path: Path) -> Ed25519PrivateKey:
+    return serialization.load_pem_private_key(Path(path).read_bytes(), password=None)
+
+
 def buyer_key(keys_dir: Path, buyer_id: str) -> Ed25519PrivateKey:
-    """The buyer's private key, made and saved on first use (make_mandate.py throws its key away)."""
+    """A demo buyer's private key, made and saved on first use (make_mandate.py throws its key away)."""
     path = Path(keys_dir) / f"{buyer_id}.pem"
     if path.exists():
-        return serialization.load_pem_private_key(path.read_bytes(), password=None)
+        return _load_key(path)
     key = signing.generate_key()
     _write_atomic(path, signing.private_pem(key))
     return key
+
+
+def _registered_pem(state_db: Path, buyer_id: str) -> str | None:
+    conn = open_ro(state_db)
+    try:
+        row = conn.execute("SELECT public_pem FROM buyers WHERE buyer_id = ?", (buyer_id,)).fetchone()
+        return row["public_pem"] if row else None
+    finally:
+        conn.close()
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -194,29 +245,33 @@ def _write_atomic(path: Path, text: str) -> None:
         raise
 
 
-def register(state_db: Path, buyer_id: str, key: Ed25519PrivateKey, actor: str, reason: str) -> None:
+def register(state_db: Path, buyer_id: str, new_key: Ed25519PrivateKey | None, actor: str,
+             reason: str) -> None:
     """The only writes web/ makes to state.db (the trade server owns it):
-    1. the buyer's public key, only when it changed (the first edit rotates the key),
+    1. a demo buyer's public key, only when it changed (its first edit rotates the key);
+       new_key is None for an onboarded kitchen, whose key is already registered,
     2. one "mandate:updated" row on the hash-chained log. audit.append takes its own
        BEGIN IMMEDIATE transaction, so it is safe next to the running trade server."""
     conn = connect(state_db)
     try:
-        pem = signing.public_pem(key.public_key())
-        with transaction(conn):
-            conn.execute("UPDATE buyers SET public_pem = ? WHERE buyer_id = ? AND public_pem != ?",
-                         (pem, buyer_id, pem))
+        if new_key is not None:
+            pem = signing.public_pem(new_key.public_key())
+            with transaction(conn):
+                conn.execute("UPDATE buyers SET public_pem = ? WHERE buyer_id = ? AND public_pem != ?",
+                             (pem, buyer_id, pem))
         audit.append(conn, datetime.now(timezone.utc), actor, "mandate:updated", reason)
     finally:
         conn.close()
 
 
-def update_mandate(*, buyer_id: str, buyer_name: str, change: Any, mandate_dir: Path,
+def update_mandate(*, buyer_id: str, buyer_name: str, change: Any, files: MandateFiles,
                    keys_dir: Path, state_db: Path, today: date) -> bool:
     """Apply a buyer's change to its mandate. Returns False when nothing changed.
 
     Raises EditError for a field that cannot be changed or a mandate that would be wrong.
     The new token goes to disk only; it is never returned."""
-    token = read_token(mandate_dir, buyer_id)
+    path = files.path(buyer_id)
+    token = files.read_token(buyer_id)
     current = decode_unverified(token) if token else None
     if not isinstance(current, dict):
         raise EditError("mandate_missing", "This account has no readable mandate to change.")
@@ -228,11 +283,24 @@ def update_mandate(*, buyer_id: str, buyer_name: str, change: Any, mandate_dir: 
     if not diff:
         return False
 
+    onboarded = files.onboarded_key(buyer_id)
+    if onboarded is not None:
+        # The kitchen's own key, registered at sign-up. Never rotated: check it still matches.
+        key, new_key = _load_key(onboarded), None
+        try:
+            registered = _registered_pem(state_db, buyer_id)
+        except sqlite3.Error:
+            registered = None
+        if registered != signing.public_pem(key.public_key()):
+            raise EditError("key_mismatch", "This kitchen's signing key in data/buyers is not the "
+                            "one Valio Aimo has on file, so a new mandate would not be accepted.")
+    else:
+        key = new_key = buyer_key(keys_dir, buyer_id)
+
     new["mandate_id"] = next_mandate_id(str(current["mandate_id"]))
     new["issued_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    key = buyer_key(keys_dir, buyer_id)
-    _write_atomic(Path(mandate_dir) / f"{buyer_id}.jwt", signing.sign(new, key, kid=buyer_id))
+    _write_atomic(path, signing.sign(new, key, kid=buyer_id))  # the same file it was read from
     reason = (f"{buyer_name} changed its mandate to {new['mandate_id']}: {'; '.join(diff)}. "
               "The agent uses the new rules from its next order.")
-    register(state_db, buyer_id, key, actor=new["approvers"][0], reason=reason)
+    register(state_db, buyer_id, new_key, actor=new["approvers"][0], reason=reason)
     return True

@@ -95,7 +95,7 @@ async def test_tool_inputs_match_the_contract():
         "search_products": ({"text", "category", "must_have_tags"}, {"text"}),
         "get_product": ({"product_id"}, {"product_id"}),
         "request_quote": ({"lines", "need_by"}, {"lines", "need_by"}),
-        "place_order": ({"quote_id", "mandate_token", "rationale", "confirm_unusual"},
+        "place_order": ({"quote_id", "mandate_token", "rationale", "confirm_unusual", "agent_signature"},
                         {"quote_id", "mandate_token", "rationale"}),
         "get_approval_status": ({"approval_id"}, {"approval_id"}),
         "get_audit_log": ({"order_id", "quote_id"}, set()),

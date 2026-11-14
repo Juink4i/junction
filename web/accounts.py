@@ -8,7 +8,9 @@ or log rows. Mandate tokens are read from disk to check them, but never returned
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -38,29 +40,61 @@ def buyer_exists(conn: sqlite3.Connection, buyer_id: str) -> bool:
     return conn.execute("SELECT 1 FROM buyers WHERE buyer_id = ?", (buyer_id,)).fetchone() is not None
 
 
+# A buyer id becomes a file name, so only ids that are safe as one are looked up.
+SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+@dataclass(frozen=True)
+class MandateFiles:
+    """Where buyers' mandates live, in the same order as agent.config.load_mandate:
+    1. data/buyers/<id>/mandate.jwt  (a kitchen signed up on the onboarding page; its own
+       signing key is next to it as buyer_key.pem),
+    2. server/mandates/<id>.jwt      (the demo buyers from server.make_mandate)."""
+
+    mandate_dir: Path
+    buyers_dir: Path
+
+    def path(self, buyer_id: str) -> Path | None:
+        """The file holding this buyer's mandate, or None if there is none."""
+        if not SAFE_ID.fullmatch(buyer_id):
+            return None
+        for candidate in (Path(self.buyers_dir) / buyer_id / "mandate.jwt",
+                          Path(self.mandate_dir) / f"{buyer_id}.jwt"):
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def onboarded_key(self, buyer_id: str) -> Path | None:
+        """The buyer's own signing key, kept by onboarding, or None for a demo buyer."""
+        if not SAFE_ID.fullmatch(buyer_id):
+            return None
+        path = Path(self.buyers_dir) / buyer_id / "buyer_key.pem"
+        return path if path.is_file() else None
+
+    def read_token(self, buyer_id: str) -> str | None:
+        """The buyer's mandate token. Only for checking and signing; never returned."""
+        path = self.path(buyer_id)
+        try:
+            return path.read_text(encoding="utf-8").strip() if path else None
+        except OSError:
+            return None
+
+
 def buyer_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Every buyer, in demo order: hotel, cafe, school, then the rest by id."""
+    """Every buyer: hotel, cafe, school first, then the rest by name."""
     rows = conn.execute("SELECT buyer_id, name FROM buyers").fetchall()
     rank = {b: i for i, b in enumerate(ACCOUNT_ORDER)}
-    rows.sort(key=lambda r: (rank.get(r["buyer_id"], len(rank)), r["buyer_id"]))
+    rows.sort(key=lambda r: (rank.get(r["buyer_id"], len(rank)), r["name"].casefold(), r["buyer_id"]))
     return rows
 
 
-def list_accounts(conn: sqlite3.Connection, mandate_dir: Path, today: date) -> list[dict]:
-    return [_account(conn, row, Path(mandate_dir), today) for row in buyer_rows(conn)]
+def list_accounts(conn: sqlite3.Connection, files: MandateFiles, today: date) -> list[dict]:
+    return [_account(conn, row, files, today) for row in buyer_rows(conn)]
 
 
-def get_account(conn: sqlite3.Connection, buyer_id: str, mandate_dir: Path, today: date) -> dict | None:
+def get_account(conn: sqlite3.Connection, buyer_id: str, files: MandateFiles, today: date) -> dict | None:
     row = conn.execute("SELECT buyer_id, name FROM buyers WHERE buyer_id = ?", (buyer_id,)).fetchone()
-    return _account(conn, row, Path(mandate_dir), today) if row else None
-
-
-def read_token(mandate_dir: Path, buyer_id: str) -> str | None:
-    """The buyer's mandate token from disk. Only for checking and signing; never returned."""
-    try:
-        return (Path(mandate_dir) / f"{buyer_id}.jwt").read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
+    return _account(conn, row, files, today) if row else None
 
 
 def decode_unverified(token: str) -> dict | None:
@@ -70,10 +104,10 @@ def decode_unverified(token: str) -> dict | None:
         return None
 
 
-def _account(conn: sqlite3.Connection, row: sqlite3.Row, mandate_dir: Path, today: date) -> dict:
+def _account(conn: sqlite3.Connection, row: sqlite3.Row, files: MandateFiles, today: date) -> dict:
     account = {"buyer_id": row["buyer_id"], "name": row["name"], "mandate": None,
                "mandate_verified": False, "mandate_problem": None}
-    token = read_token(mandate_dir, row["buyer_id"])
+    token = files.read_token(row["buyer_id"])
     if token is None:
         account["mandate_problem"] = "No mandate file for this buyer."
         return account

@@ -97,6 +97,35 @@ and why; anything dropped or substituted and why; and what the buyer needs to do
 anything."""
 
 
+PRIORITY_WORDS = {
+    "price": "the lowest total price",
+    "reliability": "better delivery reliability",
+    "finnish": "Finnish origin",
+    "sustainability": "organic or other sustainability labels and a lower carbon footprint",
+}
+PREFERENCES_INTRO = """\
+BUYER PREFERENCES
+These are preferences, not rules. Use them only to choose between products that already fit the \
+request. The server still decides what is allowed."""
+
+
+def preference_lines(profile: dict | None) -> list[str]:
+    """The buyer's preferences as plain lines. They steer ranking only; none of them is a rule."""
+    if not profile:
+        return []
+    lines = []
+    priorities = [PRIORITY_WORDS[p] for p in profile.get("priorities", []) if p in PRIORITY_WORDS]
+    if priorities:
+        lines.append("When several products fit, prefer " + ", then ".join(priorities)
+                     + ". This order replaces ranking points c to e above.")
+    if profile.get("pack_size") in ("small", "large"):
+        lines.append(f"Prefer {profile['pack_size']} packs.")
+    for order in profile.get("usual_orders", []):
+        lines.append(f"A usual order is {order['amount']:g} {order['unit']} of {order['what']} "
+                     f"every {order['every']}. \"The usual\" means this.")
+    return lines
+
+
 def calendar(today: date, days: int = 10) -> str:
     rows = [f"Today is {today:%A} {today.isoformat()} (Helsinki). The next days are:"]
     for i in range(1, days + 1):
@@ -106,8 +135,12 @@ def calendar(today: date, days: int = 10) -> str:
     return "\n".join(rows)
 
 
-def build_instruction(buyer: str, today: date, gullible: bool = False) -> str:
+def build_instruction(buyer: str, today: date, gullible: bool = False,
+                      profile: dict | None = None) -> str:
     catalog_text = GULLIBLE_CATALOG_TEXT if gullible else SAFE_CATALOG_TEXT
-    parts = [ROLE.format(buyer=buyer), calendar(today), STEPS, SUBSTITUTES,
-             GROUND_RULES.format(catalog_text=catalog_text), SUMMARY]
+    parts = [ROLE.format(buyer=buyer), calendar(today), STEPS, SUBSTITUTES]
+    lines = preference_lines(profile)
+    if lines:
+        parts.append(PREFERENCES_INTRO + "\n" + "\n".join(f"- {line}" for line in lines))
+    parts += [GROUND_RULES.format(catalog_text=catalog_text), SUMMARY]
     return "\n\n".join(parts)

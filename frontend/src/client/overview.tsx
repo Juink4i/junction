@@ -52,7 +52,9 @@ export default function ClientOverview() {
         <h1 className="text-[24px] leading-tight font-semibold tracking-tight text-emphasis sm:text-[28px]">{account?.name ?? 'Your account'}</h1>
         {m && (
           <p className="mt-1 text-sm text-muted-foreground">
-            Your agent orders on its own up to {eur(m.auto_approve.max_order_eur)} per order and {eur(m.auto_approve.max_line_eur)} per line.{' '}
+            Your agent orders on its own up to {eur(m.auto_approve.max_order_eur)} per order
+            {m.auto_approve.max_line_eur != null && <> and {eur(m.auto_approve.max_line_eur)} per line</>}
+            {m.budget && <>, within {eur(m.budget.max_eur)} per {m.budget.period}</>}.{' '}
             <Link to="/client/mandate" className="font-medium text-primary hover:underline">
               Change
             </Link>

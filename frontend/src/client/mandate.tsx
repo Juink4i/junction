@@ -1,4 +1,4 @@
-import { AlertTriangle, BadgeCheck, Ban, CalendarClock, Euro, Loader2, Pencil, Repeat, ShieldAlert, Tags, UserCheck } from 'lucide-react'
+import { AlertTriangle, BadgeCheck, Ban, CalendarClock, Euro, Loader2, Pencil, Repeat, ShieldAlert, Tags, UserCheck, Wallet } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { AllergenChips, Chip, TagChips } from '@/components/common'
@@ -14,7 +14,8 @@ import { cn } from '@/lib/utils'
 
 // Choices offered in the editor. The server validates every value again.
 const TAG_CHOICES = ['FREE_FROM_LACTOSE', 'FREE_FROM_GLUTEN', 'VEGAN', 'VEGETARIAN', 'FREE_FROM_EGGS', 'FREE_FROM_SOY', 'LOW_LACTOSE']
-const ALLERGEN_CHOICES = ['AM', 'ML', 'AW', 'AE', 'AY', 'AF', 'AC', 'UM', 'AP', 'AN', 'AS', 'AU', 'BC', 'BM', 'NL']
+const WEEKDAYS: Record<string, string> = { MON: 'Monday', TUE: 'Tuesday', WED: 'Wednesday', THU: 'Thursday', FRI: 'Friday', SAT: 'Saturday', SUN: 'Sunday' }
+const ALLERGEN_CHOICES =['AM', 'ML', 'AW', 'AE', 'AY', 'AF', 'AC', 'UM', 'AP', 'AN', 'AS', 'AU', 'BC', 'BM', 'NL']
 
 function Rule({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
@@ -32,7 +33,11 @@ function Rules({ m }: { m: Mandate }) {
   return (
     <ul className="divide-y">
       <Rule icon={<Euro className="size-4" />} title="Orders on its own up to">
-        {eur(m.auto_approve.max_order_eur)} per order and {eur(m.auto_approve.max_line_eur)} per line. Above that, you approve.
+        {eur(m.auto_approve.max_order_eur)} per order
+        {m.auto_approve.max_line_eur != null && <> and {eur(m.auto_approve.max_line_eur)} per line</>}. Above that, you approve.
+      </Rule>
+      <Rule icon={<Wallet className="size-4" />} title="Budget">
+        {m.budget ? `${eur(m.budget.max_eur)} per ${m.budget.period}. Going over comes to you.` : 'No budget limit.'}
       </Rule>
       <Rule icon={<Tags className="size-4" />} title="Allowed categories">
         {m.auto_approve.allowed_categories?.length ? m.auto_approve.allowed_categories.map(categoryName).join(', ') : 'Any category.'}
@@ -58,7 +63,8 @@ function Rules({ m }: { m: Mandate }) {
         {m.hard_rules.unknown_allergens === 'reject' ? 'Don’t buy it.' : m.hard_rules.unknown_allergens === 'human' ? 'Ask you first. Unknown is never treated as safe.' : 'Buy it anyway.'}
       </Rule>
       <Rule icon={<CalendarClock className="size-4" />} title="Delivery">
-        Must arrive by the date you need it. A missed order cut-off comes to you.
+        {m.delivery?.days?.length ? `Only on ${m.delivery.days.map((d) => WEEKDAYS[d] ?? d).join(', ')}. ` : 'Any day. '}
+        Must arrive by the date you need it. Another day, or a missed order cut-off, comes to you.
       </Rule>
       <Rule icon={<UserCheck className="size-4" />} title="Who approves">
         {m.approvers.join(', ')}
@@ -79,6 +85,9 @@ interface Draft {
   unknown: string
   approvers: string
   validUntil: string
+  budget: string
+  budgetPeriod: string
+  days: string[]
 }
 
 const draftOf = (m: Mandate): Draft => ({
@@ -93,6 +102,9 @@ const draftOf = (m: Mandate): Draft => ({
   unknown: m.hard_rules.unknown_allergens === 'reject' ? 'reject' : 'human',
   approvers: m.approvers.join(', '),
   validUntil: m.valid_until,
+  budget: m.budget ? String(m.budget.max_eur) : '',
+  budgetPeriod: m.budget?.period ?? 'week',
+  days: m.delivery?.days ?? [],
 })
 
 const list = (s: string) => s.split(/[,\s]+/).map((x) => x.trim()).filter(Boolean)
@@ -105,9 +117,9 @@ function changesOf(m: Mandate, d: Draft): { body: MandateChanges; summary: strin
     auto.max_order_eur = Number(d.maxOrder)
     summary.push(`Per order: ${eur(m.auto_approve.max_order_eur)} → ${eur(Number(d.maxOrder))}`)
   }
-  if (Number(d.maxLine) !== m.auto_approve.max_line_eur) {
+  if (d.maxLine !== '' && Number(d.maxLine) !== m.auto_approve.max_line_eur) {
     auto.max_line_eur = Number(d.maxLine)
-    summary.push(`Per line: ${eur(m.auto_approve.max_line_eur)} → ${eur(Number(d.maxLine))}`)
+    summary.push(`Per line: ${m.auto_approve.max_line_eur == null ? 'no limit' : eur(m.auto_approve.max_line_eur)} → ${eur(Number(d.maxLine))}`)
   }
   const cats = d.anyCategory ? [] : list(d.categories)
   if (cats.join() !== (m.auto_approve.allowed_categories ?? []).join()) {
@@ -142,6 +154,17 @@ function changesOf(m: Mandate, d: Draft): { body: MandateChanges; summary: strin
   }
   if (Object.keys(hard).length) body.hard_rules = hard
 
+  const budget = d.budget === '' ? null : { period: d.budgetPeriod, max_eur: Number(d.budget) }
+  if (JSON.stringify(budget) !== JSON.stringify(m.budget ? { period: m.budget.period, max_eur: m.budget.max_eur } : null)) {
+    body.budget = budget
+    summary.push(`Budget: ${budget ? `${eur(budget.max_eur)} per ${budget.period}` : 'none'}`)
+  }
+  const order = Object.keys(WEEKDAYS)
+  const days = [...d.days].sort((x, y) => order.indexOf(x) - order.indexOf(y))
+  if (days.join() !== (m.delivery?.days ?? []).join()) {
+    body.delivery = { days }
+    summary.push(`Delivery days: ${days.length ? days.map((x) => WEEKDAYS[x]).join(', ') : 'any day'}`)
+  }
   if (list(d.approvers).join() !== m.approvers.join()) {
     body.approvers = list(d.approvers)
     summary.push(`Approvers: ${list(d.approvers).join(', ')}`)
@@ -185,7 +208,7 @@ function Editor({ account, m, onDone }: { account: Account; m: Mandate; onDone: 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((x) => ({ ...x, [k]: v }))
-  const toggle = (k: 'mustKeep' | 'blocked', v: string) =>
+  const toggle = (k: 'mustKeep' | 'blocked' | 'days', v: string) =>
     setD((x) => ({ ...x, [k]: x[k].includes(v) ? x[k].filter((y) => y !== v) : [...x[k], v] }))
   const { body, summary } = changesOf(m, d)
 
@@ -216,9 +239,31 @@ function Editor({ account, m, onDone }: { account: Account; m: Mandate; onDone: 
         <Field label="Most per order (€)" hint="Bigger orders come to you for approval.">
           <Input type="number" min={1} step="any" inputMode="decimal" value={d.maxOrder} onChange={(e) => set('maxOrder', e.target.value)} required />
         </Field>
-        <Field label="Most per line (€)">
-          <Input type="number" min={1} step="any" inputMode="decimal" value={d.maxLine} onChange={(e) => set('maxLine', e.target.value)} required />
+        <Field label="Most per line (€)" hint={m.auto_approve.max_line_eur == null ? 'Optional.' : undefined}>
+          <Input type="number" min={1} step="any" inputMode="decimal" value={d.maxLine} onChange={(e) => set('maxLine', e.target.value)} required={m.auto_approve.max_line_eur != null} />
         </Field>
+      </div>
+
+      <Field label="Budget (€)" hint="Leave empty for no budget. It cannot be less than the most per order.">
+        <div className="flex max-w-sm gap-2">
+          <Input type="number" min={1} step="any" inputMode="decimal" value={d.budget} onChange={(e) => set('budget', e.target.value)} />
+          <select className="h-9 rounded-md border bg-white px-2 text-sm" value={d.budgetPeriod} onChange={(e) => set('budgetPeriod', e.target.value)} disabled={d.budget === ''} aria-label="Budget period">
+            <option value="week">per week</option>
+            <option value="month">per month</option>
+          </select>
+        </div>
+      </Field>
+
+      <div className="space-y-1.5">
+        <span className="text-sm font-medium text-emphasis">Days you can receive goods</span>
+        <div className="flex flex-wrap gap-1.5">
+          {Object.entries(WEEKDAYS).map(([code, name]) => (
+            <Toggle key={code} on={d.days.includes(code)} onClick={() => toggle('days', code)}>
+              {name}
+            </Toggle>
+          ))}
+        </div>
+        <span className="block text-xs text-muted-foreground">None picked means any day.</span>
       </div>
 
       <Field label="Categories" hint="Category codes from the Valio Aimo product file, e.g. 10400 = milk and sour milk.">

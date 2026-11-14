@@ -11,9 +11,10 @@ import asyncio
 import os
 import sys
 
-from agent.config import (BUYERS, DEFAULT_MODEL, Settings, load_gemini_key, load_mandate, quiet_logs,
-                          secret_values)
+from agent.config import (BUYERS, DEFAULT_MODEL, Settings, known_buyer, load_gemini_key, load_mandate,
+                          load_profile, quiet_logs, secret_values)
 from agent.events import EventSink
+from agent.identity import key_path
 from agent.mcp_link import TradeServerUnreachable
 from agent.runner import check_model, run_buyer
 
@@ -21,7 +22,8 @@ from agent.runner import check_model, run_buyer
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="python -m agent", description="Valio Aimo buyer agent.")
     ap.add_argument("request", help="What to buy, in plain words.")
-    ap.add_argument("--buyer", choices=sorted(BUYERS), default="hotel")
+    ap.add_argument("--buyer", default="hotel",
+                    help="hotel, cafe, school, or the id of a kitchen signed up at /onboarding.")
     ap.add_argument("--server", default=os.environ.get("TRADE_MCP_URL", "http://localhost:8000/mcp"))
     ap.add_argument("--web", default=os.environ.get("WEB_URL", "http://localhost:8080"),
                     help="Chat page server to stream events to. Use --web '' to turn off.")
@@ -38,15 +40,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     quiet_logs()
+    if not known_buyer(args.buyer):
+        print(f"No buyer called {args.buyer!r}. Use one of {', '.join(sorted(BUYERS))}, or sign a "
+              f"kitchen up at {args.web or 'http://localhost:8080'}/onboarding and use its buyer id.",
+              file=sys.stderr)
+        return 2
     if not load_gemini_key():
         print("No Gemini key. Put GEMINI_API_KEY=... in .env at the repo root.", file=sys.stderr)
         return 2
     token, source = load_mandate(args.buyer, args.mandate)
+    key_file = key_path(args.buyer)
     settings = Settings(
         buyer=args.buyer, server_url=args.server, web_url=args.web or None,
         model=args.model or os.environ.get("AGENT_MODEL", DEFAULT_MODEL),
         mandate_token=token, mandate_source=source, approval_wait_s=args.wait,
-        gullible=args.gullible, replies=args.reply)
+        gullible=args.gullible, replies=args.reply, profile=load_profile(args.buyer),
+        agent_key_file=key_file if key_file.exists() else None)
     problem = check_model(settings.model)
     if problem:
         print(problem, file=sys.stderr)

@@ -72,6 +72,11 @@ export function ClientShell({ children }: { children: ReactNode }) {
               </SelectContent>
             </Select>
           </div>
+          <div className="shrink-0">
+            <Link to="/onboarding" className="hidden text-sm font-medium text-primary hover:underline sm:inline" title="Sign up another kitchen">
+              + New kitchen
+            </Link>
+          </div>
         </div>
       </header>
 

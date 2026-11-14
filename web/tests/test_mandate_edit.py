@@ -2,10 +2,17 @@
 
 from datetime import date
 
+import jwt
 import pytest
 
-from server import audit
+from agent.identity import key_path, sign_order
+from server import audit, signing
 from server.mandate import verify_mandate
+from web.tests.world import KID, NEED_BY
+
+
+def decode(token: str) -> dict:
+    return jwt.decode(token, options={"verify_signature": False})
 
 
 def _updates(conn) -> list:
@@ -141,3 +148,90 @@ def test_unknown_account_is_404(client, world):
     res = client.put("/api/accounts/nobody/mandate", json={"auto_approve": {"max_order_eur": 600}})
     assert res.status_code == 404
     assert res.json()["code"] == "account_not_found"
+
+
+# Kitchens signed up through onboarding, and main's new mandate fields
+
+
+def test_onboarded_kitchen_edits_in_place_with_its_own_key(client, world):
+    path = world.buyers / KID / "mandate.jwt"
+    before = decode(path.read_text())
+    pem = _pem(world.conn, KID)
+
+    res = client.put(f"/api/accounts/{KID}/mandate",
+                     json={"budget": {"max_eur": 1000}, "auto_approve": {"max_order_eur": 120}})
+    assert res.status_code == 200, res.text
+    assert res.json()["mandate_verified"] is True
+    after = decode(path.read_text())
+    assert after["mandate_id"] == f"mnd_{KID}_002"
+    assert after["budget"] == {"period": "week", "max_eur": 1000}
+    for kept in ("agent_key", "usual_orders", "delivery", "agent_id", "buyer"):
+        assert after[kept] == before[kept]
+    assert after["hard_rules"]["no_delivery_after"] == before["hard_rules"]["no_delivery_after"]
+    assert not (world.mandates / f"{KID}.jwt").exists()
+    assert not (world.keys / f"{KID}.pem").exists()
+    assert _pem(world.conn, KID) == pem  # never rotated
+    [row] = _updates(world.conn)
+    assert row["actor"] == "kitchen.lead@aurinko.example"
+    assert "budget €150.00 per week → €1,000.00 per week" in row["reason"]
+    assert "limit per order €100.00 → €120.00" in row["reason"]
+    assert audit.verify(world.conn) == {"ok": True}
+
+    # The agent still orders with the new mandate, signing the new mandate id.
+    token = path.read_text()
+    q = world.svc.request_quote([{"product_id": "464201", "amount": 40, "unit": "L"}], NEED_BY)
+    signature = sign_order(key_path(KID, world.buyers), token, q["quote_id"], False)
+    result = world.svc.place_order(q["quote_id"], token, "more milk", agent_signature=signature)
+    assert result["status"] == "confirmed", result
+
+
+def test_budget_and_delivery_days(client, world):
+    res = client.put("/api/accounts/cafe/mandate",
+                     json={"budget": {"period": "week", "max_eur": 600},
+                           "delivery": {"days": ["FRI", "MON", "MON"]}})
+    assert res.status_code == 200, res.text
+    m = res.json()["mandate"]
+    assert m["budget"] == {"period": "week", "max_eur": 600}
+    assert m["delivery"] == {"days": ["MON", "FRI"]}
+    [row] = _updates(world.conn)
+    assert "budget none → €600.00 per week" in row["reason"]
+    assert "delivery days any day → Monday, Friday" in row["reason"]
+
+    res = client.put("/api/accounts/cafe/mandate", json={"budget": None, "delivery": {"days": []}})
+    assert res.status_code == 200, res.text
+    m = res.json()["mandate"]
+    assert "budget" not in m and "delivery" not in m
+    res = client.put(f"/api/accounts/{KID}/mandate", json={"delivery": None})
+    assert "delivery" not in res.json()["mandate"]
+
+
+@pytest.mark.parametrize("body,words", [
+    ({"budget": {"period": "day", "max_eur": 600}}, "period of week or month"),
+    ({"budget": {"period": "week", "max_eur": 0}}, "above zero"),
+    ({"budget": {"max_eur": 600}}, "period of week or month"),
+    ({"budget": {"period": "week", "max_eur": 100}}, "cannot be less than the limit per order"),
+    ({"delivery": {"days": ["XYZ"]}}, "delivery.days"),
+])
+def test_rejects_bad_budget_and_days(client, world, body, words):
+    res = client.put("/api/accounts/cafe/mandate", json=body)
+    assert res.status_code == 400
+    assert res.json()["code"] == "bad_mandate"
+    assert words in res.json()["message"]
+    assert _updates(world.conn) == []
+
+
+@pytest.mark.parametrize("body", [{"budget": {"limit": 1}}, {"delivery": {"note": "back door"}},
+                                  {"agent_key": "x"}, {"usual_orders": []}, {"budget": 5}])
+def test_new_fields_that_are_not_editable(client, world, body):
+    res = client.put(f"/api/accounts/{KID}/mandate", json=body)
+    assert res.status_code == 400 and res.json()["code"] == "bad_field"
+
+
+def test_onboarded_key_that_does_not_match_is_refused(client, world):
+    path = world.buyers / KID / "mandate.jwt"
+    token = path.read_text()
+    (world.buyers / KID / "buyer_key.pem").write_text(signing.private_pem(signing.generate_key()))
+    res = client.put(f"/api/accounts/{KID}/mandate", json={"budget": {"max_eur": 1000}})
+    assert res.status_code == 409 and res.json()["code"] == "key_mismatch"
+    assert path.read_text() == token
+    assert _updates(world.conn) == []

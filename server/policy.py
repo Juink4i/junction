@@ -1,9 +1,25 @@
 """Policy: plain code that decides what happens to an order. No AI in here."""
 
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from statistics import median
 
 UNUSUAL_FACTOR = 5
+PERIOD_WORDS = {"week": ("this week's", "weekly"), "month": ("this month's", "monthly")}
+WEEKDAY_NAMES = {"MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "Thursday",
+                 "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday"}
+
+
+def _and(words: list[str]) -> str:
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def period_start(period: str, now: datetime) -> datetime:
+    """When the current budget period began: Monday 00:00 for a week, the 1st for a month."""
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "week":
+        return midnight - timedelta(days=midnight.weekday())
+    return midnight.replace(day=1)
 
 
 @dataclass
@@ -77,7 +93,7 @@ def _unusual(quote: dict, products: dict, history: list[dict]) -> list[str]:
     return reasons
 
 
-def _needs_human(quote: dict, mandate: dict, products: dict) -> list[str]:
+def _needs_human(quote: dict, mandate: dict, products: dict, spent_in_period: float = 0.0) -> list[str]:
     limits = mandate["auto_approve"]
     rules = mandate["hard_rules"]
     must_keep = mandate.get("substitution", {}).get("must_keep", [])
@@ -94,6 +110,14 @@ def _needs_human(quote: dict, mandate: dict, products: dict) -> list[str]:
         if max_line is not None and total > max_line:
             reasons.append(f"{name} costs {eur(total)}, over the mandate's "
                            f"limit of {eur(max_line)} per line.")
+    budget = mandate.get("budget")
+    if budget:
+        total = round(spent_in_period + quote["total_eur"], 2)
+        if total > budget["max_eur"]:
+            this, adjective = PERIOD_WORDS[budget["period"]]
+            reasons.append(f"This order of {eur(quote['total_eur'])} would bring {this} spending "
+                           f"to {eur(total)}, over the {adjective} budget of {eur(budget['max_eur'])}.")
+    days = (mandate.get("delivery") or {}).get("days")
     for line in quote["lines"]:
         product = products[line["product_id"]]
         if line["cutoff_passed"]:
@@ -104,6 +128,12 @@ def _needs_human(quote: dict, mandate: dict, products: dict) -> list[str]:
         elif line["available_date"] > quote["need_by"]:
             reasons.append(f"{line['name']} would arrive on {line['available_date']}, "
                            f"after the need-by date {quote['need_by']}.")
+        if days and line["available_date"] is not None:
+            arrives = list(WEEKDAY_NAMES)[date.fromisoformat(line["available_date"]).weekday()]
+            if arrives not in days:
+                allowed = _and([name for code, name in WEEKDAY_NAMES.items() if code in days])
+                reasons.append(f"{line['name']} would arrive on a {WEEKDAY_NAMES[arrives]}. "
+                               f"This kitchen receives goods on {allowed} only.")
         if rules.get("unknown_allergens", "human") == "human":
             unknown = _unknown_blocked(product, {c.upper() for c in rules.get("blocked_allergens", [])})
             if product.allergen_info_missing:
@@ -121,10 +151,12 @@ def _needs_human(quote: dict, mandate: dict, products: dict) -> list[str]:
 
 
 def decide(quote: dict, mandate: dict, products: dict, history: list[dict],
-           confirm_unusual: bool = False, ai_unusual: str | None = None) -> Decision:
+           confirm_unusual: bool = False, ai_unusual: str | None = None,
+           spent_in_period: float = 0.0) -> Decision:
     """quote is a verified quote plus its need_by date; mandate is already verified.
 
     ai_unusual is an optional reason from an outside scorer. It can only add a question.
+    spent_in_period is what the buyer's other live orders add up to in the current budget period.
     """
     stops = _hard_stops(quote, mandate, products)
     if stops:
@@ -139,7 +171,7 @@ def decide(quote: dict, mandate: dict, products: dict, history: list[dict],
                      "person for approval.",
         )
 
-    for_human = _needs_human(quote, mandate, products)
+    for_human = _needs_human(quote, mandate, products, spent_in_period)
     if unusual:
         for_human += [f"{r} The agent confirmed the amount." for r in unusual]
     if for_human:

@@ -4,6 +4,7 @@ import { ClientShell } from '@/client/shell'
 import ClientChat from '@/client/chat'
 import ClientMandate from '@/client/mandate'
 import ClientOverview from '@/client/overview'
+import Onboarding from '@/client/onboarding'
 import { OrderDetail } from '@/components/order-detail'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -48,6 +49,12 @@ function Landing() {
             </Link>
           ))}
         </div>
+        <p className="mt-6 text-center text-sm text-muted-foreground">
+          A new kitchen?{' '}
+          <Link to="/onboarding" className="font-medium text-primary hover:underline">
+            Set up your kitchen
+          </Link>
+        </p>
       </div>
     </div>
   )
@@ -88,6 +95,7 @@ export default function App() {
       <TooltipProvider>
         <Routes>
           <Route path="/" element={<Landing />} />
+          <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/client" element={<ClientLayout />}>
             <Route index element={<ClientOverview />} />
             <Route path="chat" element={<ClientChat />} />

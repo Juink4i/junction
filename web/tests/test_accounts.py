@@ -6,14 +6,15 @@ from starlette.testclient import TestClient
 
 from server import fake_catalog
 from web.app import create_app
-from web.tests.world import NEED_BY
+from web.tests.world import KID, NEED_BY, SOINTU
 
 
 def test_accounts_list_mandates_without_tokens(client, world):
     res = client.get("/api/accounts")
     assert res.status_code == 200
     accounts = res.json()
-    assert [a["buyer_id"] for a in accounts] == ["hotel", "cafe", "school"]
+    # Demo buyers first, then onboarded kitchens by name (Café Sointu before Päiväkoti Aurinko).
+    assert [a["buyer_id"] for a in accounts] == ["hotel", "cafe", "school", SOINTU, KID]
     hotel = accounts[0]
     assert hotel["name"] == "Hotel Chain Oy / Helsinki Central"
     assert hotel["mandate"]["auto_approve"]["max_line_eur"] == 800
@@ -248,3 +249,35 @@ def test_missing_state_db_is_a_clear_error(world, tmp_path):
     assert res.status_code == 503
     assert res.json()["code"] == "state_db_unavailable"
     assert not (tmp_path / "missing.db").exists()
+
+
+def test_onboarded_kitchen_is_an_account(client, world):
+    res = client.get("/api/accounts")
+    accounts = {a["buyer_id"]: a for a in res.json()}
+    kid = accounts[KID]
+    assert kid["name"] == "Päiväkoti Aurinko"
+    assert kid["mandate_verified"] is True and kid["mandate_problem"] is None
+    assert kid["mandate"]["mandate_id"] == f"mnd_{KID}_001"
+    assert "PUBLIC KEY" in kid["mandate"]["agent_key"]  # the agent's public half, not a secret
+    assert kid["mandate"]["budget"] == {"period": "week", "max_eur": 150}
+    assert kid["mandate"]["usual_orders"][0]["amount"] == 40
+    assert accounts[SOINTU]["mandate_verified"] is True
+    for buyer_id in (KID, SOINTU):
+        token = (world.buyers / buyer_id / "mandate.jwt").read_text()
+        assert token.split(".")[2] not in res.text
+    assert "PRIVATE" not in res.text
+
+
+def test_onboarded_kitchen_sees_only_its_own(client, world):
+    order_id = world.kid["order_id"]
+    assert [o["order_id"] for o in client.get(f"/api/accounts/{KID}/orders").json()] == [order_id]
+    assert order_id not in [o["order_id"] for o in client.get("/api/accounts/hotel/orders").json()]
+    assert client.get(f"/api/accounts/hotel/orders/{order_id}").status_code == 404
+    assert client.get(f"/api/accounts/{KID}/orders/{world.hotel['order_id']}").status_code == 404
+    assert client.get(f"/api/accounts/{KID}/orders/{order_id}").json()["status"] == "confirmed"
+    log = client.get(f"/api/accounts/{KID}/log").json()
+    assert log and {r["quote_id"] for r in log} == {world.kid["quote_id"]}
+    assert client.get(f"/api/accounts/{SOINTU}/orders").json() == []
+    assert client.get(f"/api/accounts/{SOINTU}/log").json() == []
+    res = client.post(f"/api/accounts/{KID}/approvals/{world.hotel['approval_id']}/approve")
+    assert res.status_code == 404 and world.trade.calls == []
