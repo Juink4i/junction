@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import date, timedelta
 
 import httpx
@@ -18,10 +19,10 @@ def client(fake):
 
 
 async def _pending_order(fake) -> str:
-    async with TradeLink(fake.mcp_url) as link:
-        q = await link.call("request_quote", {"lines": [{"product_id": "464201", "amount": 1000,
-                                                         "unit": "L"}], "need_by": MONDAY})
-        r = await link.call("place_order", {"quote_id": q["quote_id"], "mandate_token": "demo-hotel",
+    async with TradeLink(fake.mcp_url, "demo-hotel") as link:
+        priced = await link.call("request_quote", {"product_ids": ["464201"], "amount": 1000,
+                                                   "unit": "L", "need_by": MONDAY})
+        r = await link.call("place_order", {"quote_id": priced["options"][0]["quote"]["quote_id"],
                                             "rationale": "test"})
     return r["approval_id"]
 
@@ -32,6 +33,16 @@ def test_pages_load(client, path, title):
     res = client.get(path)
     assert res.status_code == 200
     assert title in res.text
+
+
+@pytest.mark.parametrize("path", ["/", "/approvals", "/log", "/chat", "/onboarding"])
+def test_every_page_finds_its_built_scripts_and_styles(client, path):
+    # The pages are built from web/ui (npm run build). A missing or stale build shows here.
+    page = client.get(path).text
+    assets = re.findall(r'(?:src|href)="(/static/[^"]+)"', page)
+    assert any(a.endswith(".js") for a in assets) and any(a.endswith(".css") for a in assets)
+    for asset in assets:
+        assert client.get(asset).status_code == 200, asset
 
 
 async def test_approve_from_the_phone_page(client, fake):

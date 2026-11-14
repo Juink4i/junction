@@ -74,6 +74,9 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     finally:
         sink.close()
+    if result.mandate_problem:
+        print(f"\n{result.mandate_problem}", file=sys.stderr)
+        return 4
     print(f"\nOutcome: {result.outcome or 'no order placed'}")
     return 1 if result.error else 0
 

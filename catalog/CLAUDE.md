@@ -1,12 +1,12 @@
-# Runner 1: Catalog
+# Catalog
 
-You own `catalog/` and `data/`. Branch: `catalog`. Do not edit `server/`, `agent/`, `web/` or `demo/`.
+This part is `catalog/` and `data/`. The work is no longer split by runner or branch. See the root `CLAUDE.md`.
 
 ## Goal
 
 A Python package the server imports to answer: what matches a request, how many units to order, what it costs and when it can arrive.
 
-You provide **Contract A** in `docs/runner-tasks.md` (five functions in `catalog/api.py`). The done-checklist is in the same file under "Prompts for each runner → Runner 1".
+You provide **Contract A** in `docs/runner-tasks.md` (five functions in `catalog/api.py`).
 
 ## Context you need
 

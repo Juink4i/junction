@@ -9,14 +9,14 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 
 from agent.identity import ensure_agent_key, key_path, sign_order, session_token
-from agent.mcp_link import TradeLink, TradeServerRefused
+from agent.mcp_link import MandateRefused, TradeLink, TradeServerRefused
 from demo.servers import run_in_thread
 from server import app as server_app
 from server import audit, fake_catalog
 from server.app import build_http_app
 from server.db import connect
 from server.make_mandate import issue_demo_mandates
-from server.service import OTHER_KITCHEN, Service
+from server.service import Service
 from server.tests.kitchens import mcp_headers, register_kitchen
 
 NEED_BY = (date.today() + timedelta(days=2)).isoformat()
@@ -133,16 +133,14 @@ def test_a_minute_of_clock_difference_is_allowed(world):
 async def test_a_registered_agent_can_use_the_tools_under_its_own_name(world):
     async with TradeLink(world.mcp, mandate_token=world.aurinko.mandate_token,
                          agent_key_file=world.aurinko.agent_key_file) as link:
-        found = await link.call("search_products", {"text": "milk", "category": "10400"})
-        assert "464201" in {p["id"] for p in found}
+        found = await link.call("search_products", {"product": "milk"})
+        assert "464201" in {p["id"] for p in found["products"]}
         await link.call("get_product", {"product_id": "464201"})
-        quote = await link.call("request_quote", {"need_by": NEED_BY, "lines": [
-            {"product_id": "464201", "amount": 40, "unit": "L"}]})
+        quote = await _quote(link, 40)
         signature = sign_order(world.aurinko.agent_key_file, world.aurinko.mandate_token,
-                               quote["quote_id"], False)
+                               quote["quote_id"])
         result = await link.call("place_order", {
-            "quote_id": quote["quote_id"], "mandate_token": world.aurinko.mandate_token,
-            "rationale": "weekly milk", "agent_signature": signature})
+            "quote_id": quote["quote_id"], "rationale": "weekly milk", "agent_signature": signature})
         assert result["status"] == "confirmed", result
     rows = world.svc.conn.execute(
         "SELECT actor, action FROM log WHERE action IN "
@@ -152,35 +150,34 @@ async def test_a_registered_agent_can_use_the_tools_under_its_own_name(world):
                                            "place_order"}
 
 
-async def test_an_agent_cannot_order_for_another_kitchen(world):
+async def test_another_kitchens_agent_cannot_sign_this_kitchens_order(world):
     async with TradeLink(world.mcp, mandate_token=world.aurinko.mandate_token,
                          agent_key_file=world.aurinko.agent_key_file) as link:
-        quote = await link.call("request_quote", {"need_by": NEED_BY, "lines": [
-            {"product_id": "464201", "amount": 20, "unit": "L"}]})
-        # Even with Sointu's mandate and a valid signature from Sointu's own agent.
-        signature = sign_order(world.sointu.agent_key_file, world.sointu.mandate_token,
-                               quote["quote_id"], False)
+        quote = await _quote(link, 20)
+        # A valid signature, but from Sointu's agent: not the key Aurinko's mandate names.
+        signature = sign_order(world.sointu.agent_key_file, world.aurinko.mandate_token,
+                               quote["quote_id"])
         result = await link.call("place_order", {
-            "quote_id": quote["quote_id"], "mandate_token": world.sointu.mandate_token,
-            "rationale": "sneaky", "agent_signature": signature})
+            "quote_id": quote["quote_id"], "rationale": "sneaky", "agent_signature": signature})
     assert result["status"] == "rejected"
-    assert result["reasons"] == [OTHER_KITCHEN]
     assert world.svc.conn.execute("SELECT count(*) FROM orders").fetchone()[0] == 0
-    row = world.svc.conn.execute(
-        "SELECT * FROM log WHERE action = 'place_order' ORDER BY seq DESC").fetchone()
-    assert row["actor"] == "agent-aurinko-3f2a" and "Café Sointu" in row["reason"]
+
+
+async def _quote(link, litres):
+    """The first option request_quote offers for product 464201."""
+    options = await link.call("request_quote", {"product_ids": ["464201"], "amount": litres,
+                                                "unit": "L", "need_by": NEED_BY})
+    return options["options"][0]["quote"]
 
 
 async def _order(world, kitchen, litres):
     """kitchen's agent quotes and orders; returns (quote, result)."""
     async with TradeLink(world.mcp, mandate_token=kitchen.mandate_token,
                          agent_key_file=kitchen.agent_key_file) as link:
-        quote = await link.call("request_quote", {"need_by": NEED_BY, "lines": [
-            {"product_id": "464201", "amount": litres, "unit": "L"}]})
-        signature = sign_order(kitchen.agent_key_file, kitchen.mandate_token, quote["quote_id"], False)
+        quote = await _quote(link, litres)
+        signature = sign_order(kitchen.agent_key_file, kitchen.mandate_token, quote["quote_id"])
         result = await link.call("place_order", {
-            "quote_id": quote["quote_id"], "mandate_token": kitchen.mandate_token,
-            "rationale": "test", "agent_signature": signature})
+            "quote_id": quote["quote_id"], "rationale": "test", "agent_signature": signature})
     return quote, result
 
 
@@ -204,8 +201,7 @@ async def test_an_agent_reads_only_its_own_kitchens_audit_log(world):
 async def test_an_agent_reads_its_own_quote_before_ordering_but_not_anothers(world):
     async with TradeLink(world.mcp, mandate_token=world.aurinko.mandate_token,
                          agent_key_file=world.aurinko.agent_key_file) as link:
-        quote = await link.call("request_quote", {"need_by": NEED_BY, "lines": [
-            {"product_id": "464201", "amount": 40, "unit": "L"}]})
+        quote = await _quote(link, 40)
         assert await link.call("get_audit_log", {"quote_id": quote["quote_id"]})
     assert await _as(world, world.sointu, "get_audit_log", {"quote_id": quote["quote_id"]}) == []
 
@@ -230,9 +226,11 @@ async def test_a_refused_agent_gets_a_clear_error(world):
         async with TradeLink(world.mcp, mandate_token=world.demo_tokens["hotel"],
                              agent_key_file=key_path("hotel", world.buyers)):
             pass
-    with pytest.raises(TradeServerRefused, match="agent_not_authenticated"):
+    # No mandate at all: the agent's own check of /mandate stops it first, with the reason.
+    with pytest.raises(MandateRefused) as refused:
         async with TradeLink(world.mcp):
             pass
+    assert refused.value.code == "mandate_missing"
 
 
 def test_refusals_are_logged_without_tokens_and_the_chain_holds(world):

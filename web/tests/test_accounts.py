@@ -176,7 +176,7 @@ def test_log_is_per_account(client, world):
 
 
 def test_new_writes_show_up(client, world):
-    q = world.svc.request_quote([{"product_id": "464201", "amount": 200, "unit": "L"}], NEED_BY)
+    q = world.quote(world.tokens["school"], "464201", 200)
     r = world.svc.place_order(q["quote_id"], world.tokens["school"], "school milk")
     orders = client.get("/api/accounts/school/orders").json()
     assert [o["order_id"] for o in orders] == [r["order_id"]]

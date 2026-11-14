@@ -7,20 +7,26 @@ import math
 import secrets
 import sqlite3
 import threading
+from collections import Counter
 from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
 import jwt
 
-from server import audit, signing
+from server import audit, ranking, signing, vocabulary
 from server.agent_auth import AgentTokenError, check_session_token
 from server.db import transaction
 from server.mandate import BUYER_ID, MandateError, check_mandate, verify_mandate
-from server.policy import decide, eur, period_start
-from server.unusual import MODEL, REASON_PREFIX, THRESHOLD, flag_reason
+from server.seller import KeywordSeller, Need, keyword_verdict
+from server.policy import decide, eur, hard_stops, period_start
+from server.unusual import MODEL, THRESHOLD, flag_reason
 
 QUOTE_TTL = timedelta(minutes=15)
-OTHER_KITCHEN = "This agent may only order for the kitchen it is registered for."
+CANDIDATE_LIMIT = 100  # the most products one search hands to the seller
+MAX_QUOTE_PRODUCTS = 40  # the most products one quote request prices
+MAX_OPTIONS = 5
+MAX_ALTERNATIVES = 3
+WITHDRAWN = "Withdrawn: the buyer's agent ordered another option from the same request."
 SUMMARY_FIELDS = ("id", "name_en", "name_fi", "category", "sales_unit", "tags", "labels")
 PRODUCT_FIELDS = SUMMARY_FIELDS + (
     "allergens_contains", "allergens_may_contain", "allergens_free_from", "allergen_info_missing",
@@ -39,7 +45,9 @@ def _pick(obj: Any, fields: tuple[str, ...]) -> dict[str, Any]:
         obj = dataclasses.asdict(obj)
     elif hasattr(obj, "model_dump"):
         obj = obj.model_dump()
-    return {f: obj[f] for f in fields}
+    picked = {f: obj[f] for f in fields}
+    picked["properties"] = vocabulary.names(picked["tags"])  # the tags in plain words
+    return picked
 
 
 def _new_id(prefix: str) -> str:
@@ -55,12 +63,35 @@ def locked(method):
     return wrapper
 
 
+@dataclasses.dataclass(frozen=True)
+class Buyer:
+    """Who a tool call is from: the buyer behind the mandate the connection showed."""
+    buyer_id: str
+    mandate: dict
+
+    @property
+    def actor(self) -> str:
+        return str(self.mandate["agent_id"])
+
+    @property
+    def name(self) -> str:
+        return str(self.mandate["buyer"])
+
+    @property
+    def caller(self) -> dict:
+        """Who is asking, for the checks that keep each kitchen to its own records."""
+        return {"buyer_id": self.buyer_id, "agent_id": self.actor,
+                "mandate_id": str(self.mandate["mandate_id"])}
+
+
 class Service:
     def __init__(self, conn: sqlite3.Connection, catalog: Any, now: Callable[[], datetime],
-                 unusual_scorer: Any = None, require_enrolment_code: bool = False):
+                 unusual_scorer: Any = None, require_enrolment_code: bool = False,
+                 seller: Any = None):
         self.conn = conn
         self.unusual_scorer = unusual_scorer
         self.require_enrolment_code = require_enrolment_code
+        self.seller = seller or KeywordSeller()
         self.catalog = catalog
         self.now = now
         self.key = signing.server_key(conn)
@@ -69,6 +100,19 @@ class Service:
     def _log(self, actor: str, action: str, reason: str, order_id: str | None = None,
              quote_id: str | None = None) -> None:
         audit.append(self.conn, self.now(), actor, action, reason, order_id, quote_id)
+
+    @locked
+    def authenticate(self, token: str | None) -> Buyer:
+        """The buyer behind a mandate token. Raises MandateError; every refusal is logged."""
+        try:
+            if not token:
+                raise MandateError("No mandate was shown. Connect with the kitchen's signed mandate "
+                                   "in X-Mandate.", code="mandate_missing")
+            buyer_id, mandate = verify_mandate(token, self.conn, self.now().date())
+        except MandateError as e:
+            self._log("unknown agent", "connect:refused", f"A connection was refused. {e}")
+            raise
+        return Buyer(buyer_id, mandate)
 
     # Buyers
 
@@ -176,15 +220,83 @@ class Service:
 
     # Search and details: static data only.
 
-    @locked
-    def search_products(self, text: str, category: str | None = None,
-                        must_have_tags: list[str] | None = None, actor: str = "agent") -> list[dict]:
-        tags = must_have_tags or []
-        found = self.catalog.search_products(text, category, tags)
-        filters = "".join([f", category {category}" if category else "",
-                           f", tags {', '.join(tags)}" if tags else ""])
-        self._log(actor, "search_products", f"Searched for \"{text}\"{filters}. {len(found)} products found.")
-        return [_pick(p, SUMMARY_FIELDS) for p in found]
+    def _ask(self, buyer: Buyer, action: str, question: str, missing: list[str] | None = None,
+             unknown: list[str] | None = None) -> dict:
+        """The seller's side asks for what a request lacks. Plain code, no AI."""
+        with self._lock:
+            self._log(buyer.actor, action, f"Asked the agent: {question}")
+        return {"status": "needs_clarification", "missing": missing or [], "unknown": unknown or [],
+                "known_properties": vocabulary.known_names(), "question": question}
+
+    def search_products(self, buyer: Buyer, product: str | None, must_have: list[str] | None = None,
+                        amount: float | None = None, unit: str | None = None) -> dict:
+        """The products that fit a request, and what was dropped and why.
+
+        Not @locked as a whole: the seller agent can take seconds, and the approval and log
+        pages must not wait for it. Only the log write takes the lock.
+        """
+        understood = vocabulary.understand(product or "", must_have)
+        if understood.unknown:
+            words = ", ".join(f'"{w}"' for w in understood.unknown)
+            return self._ask(buyer, "search_products", unknown=understood.unknown,
+                             question=f"I don't know the product property {words}. Use one of the "
+                                      "known properties, or leave it out.")
+        if not understood.text:
+            return self._ask(buyer, "search_products", missing=["product"],
+                             question='What product do you need? Give it in plain words, '
+                                      'for example "milk".')
+
+        # The mandate's own must-haves and categories always apply. Plain code, before any AI.
+        from_mandate = list(buyer.mandate.get("substitution", {}).get("must_keep", []))
+        tags = list(dict.fromkeys(understood.tags + from_mandate))
+        allowed = buyer.mandate["auto_approve"].get("allowed_categories")
+        found = []
+        for category in allowed if allowed is not None else [None]:
+            found += self.catalog.search_products(understood.text, category, tags, CANDIDATE_LIMIT + 1)
+        truncated = len(found) > CANDIDATE_LIMIT
+        candidates = found[:CANDIDATE_LIMIT]
+
+        need = Need(" ".join(str(product).split()), tuple(vocabulary.names(tags)), amount, unit)
+        try:
+            screening = self.seller.screen(need, candidates)
+        except Exception:  # a search never fails because of the seller
+            screening = KeywordSeller().screen(need, candidates)
+        kept, dropped = [], []
+        for p in candidates:  # only candidates are looked at, so the seller cannot add a product
+            verdict = screening.verdicts.get(p.id) or keyword_verdict(need, p)
+            if verdict.keep:
+                kept.append(_pick(p, SUMMARY_FIELDS))
+            else:
+                dropped.append({"id": p.id, "name": p.name_en, "reason": verdict.reason})
+
+        must = f", must be {', '.join(need.must_have)}" if need.must_have else ""
+        why = Counter(d["reason"] for d in dropped).most_common(4)
+        dropped_text = (" Dropped: " + ", ".join(f"{reason} ({n})" for reason, n in why) + "."
+                        if dropped else "")
+        with self._lock:
+            self._log(buyer.actor, "search_products",
+                      f'Searched for "{understood.text}"{must}. {len(candidates)} candidates; '
+                      f"{screening.screened_by} kept {len(kept)} and dropped {len(dropped)}."
+                      f"{dropped_text}")
+
+        result = {
+            "status": "ok",
+            "understood": {"product": understood.text, "must_have": vocabulary.names(understood.tags),
+                           "from_mandate": vocabulary.names(from_mandate)},
+            "products": kept,
+            "dropped": dropped,
+            "screened_by": screening.screened_by,
+            "total_matches": len(candidates),
+            "truncated": truncated,
+        }
+        if truncated:
+            result["hint"] = (f"More than {CANDIDATE_LIMIT} products match. Add a must-have or "
+                              "more specific words.")
+        elif not candidates:
+            result["hint"] = (f'Nothing matches "{understood.text}"{must}. Try fewer or different '
+                              "words. A product only counts as having a property when its "
+                              "supplier claims it.")
+        return result
 
     @locked
     def get_product(self, product_id: str, actor: str = "agent") -> dict:
@@ -198,7 +310,8 @@ class Service:
     # Quotes
 
     @locked
-    def request_quote(self, lines: list[dict], need_by: date | str, actor: str = "agent") -> dict:
+    def quote_lines(self, lines: list[dict], need_by: date | str, actor: str = "agent") -> dict:
+        """One signed quote for exactly these lines. The low-level builder; not a tool."""
         result = self._build_quote(lines, need_by)
         if "quote_id" in result:
             summary = "; ".join(f"{l['units']:,} × {l['name']} for {eur(l['line_total_eur'])}"
@@ -273,7 +386,7 @@ class Service:
         if "code" in offers and "retryable" in offers:
             return offers
 
-        quote_lines, total_with_tax = [], 0.0
+        quoted = []
         for product, plan in plans:
             offer = offers.get(product.id)
             if offer is None or not offer.orderable:
@@ -288,21 +401,43 @@ class Service:
                     f"{plan.covers:g} {plan.content_unit} asked for. Quote what is available and "
                     "cover the rest with a substitute." + self._substitute_hint(product, need_by),
                 )
-            quote_lines.append({
-                "product_id": product.id,
-                "name": product.name_en,
-                "units": plan.units,
-                "sales_unit": plan.sales_unit,
-                "covers": plan.covers,
-                "content_unit": plan.content_unit,
-                "unit_price_eur": offer.unit_price_eur,
-                "line_total_eur": round(plan.units * offer.unit_price_eur, 2),
-                "available_date": offer.available_date.isoformat() if offer.available_date else None,
-                "cutoff_passed": bool(offer.cutoff_passed),
-                "stock": "confirmed" if offer.available_units is not None else "unconfirmed",
-            })
-            total_with_tax += plan.units * offer.unit_price_with_tax_eur
+            quoted.append(ranking.Line(self._candidate(product, plan, offer), plan.units))
+        return self._issue_quote(quoted, need_by, now)
 
+    def _candidate(self, product: Any, plan: Any, offer: Any) -> ranking.Candidate:
+        """One product sized and priced, in the shape the ranking and the quote both use."""
+        return ranking.Candidate(
+            product_id=product.id, name=product.name_en, sales_unit=plan.sales_unit,
+            content_per_unit=plan.content_per_unit, content_unit=plan.content_unit, units=plan.units,
+            unit_price_eur=offer.unit_price_eur,
+            unit_price_with_tax_eur=offer.unit_price_with_tax_eur,
+            available_date=offer.available_date, closing_time=offer.closing_time,
+            cutoff_passed=bool(offer.cutoff_passed), available_units=offer.available_units,
+            reliability=product.delivery_reliability, country=product.country,
+            labels=tuple(product.labels), carbon=product.carbon_kg_per_kg)
+
+    def _issue_quote(self, lines: list[ranking.Line], need_by: date, now: datetime,
+                     buyer_id: str | None = None, set_id: str | None = None,
+                     rank: int | None = None, label: str | None = None) -> dict:
+        """Sign and store one quote for these lines."""
+        quote_lines, total_with_tax = [], 0.0
+        for line in lines:
+            c = line.candidate
+            quote_lines.append({
+                "product_id": c.product_id,
+                "name": c.name,
+                "units": line.units,
+                "sales_unit": c.sales_unit,
+                "covers": line.covers,
+                "content_unit": c.content_unit,
+                "unit_price_eur": c.unit_price_eur,
+                "line_total_eur": line.total_eur,
+                "available_date": c.available_date.isoformat() if c.available_date else None,
+                "cutoff_passed": c.cutoff_passed,
+                "closing_time": c.closing_time.isoformat(timespec="seconds") if c.closing_time else None,
+                "stock": "confirmed" if c.available_units is not None else "unconfirmed",
+            })
+            total_with_tax += line.units * c.unit_price_with_tax_eur
         body = {
             "quote_id": _new_id("q"),
             "lines": quote_lines,
@@ -312,21 +447,131 @@ class Service:
         }
         signature = signing.sign_quote(body, need_by, self.key)
         self.conn.execute(
-            "INSERT INTO quotes (quote_id, body_json, signature, created_at) VALUES (?, ?, ?, ?)",
-            (body["quote_id"], json.dumps(body), signature, now.isoformat()),
+            "INSERT INTO quotes (quote_id, body_json, signature, created_at, buyer_id, set_id, rank, "
+            "label) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (body["quote_id"], json.dumps(body), signature, now.isoformat(), buyer_id, set_id, rank,
+             label),
         )
         return {**body, "signature": signature}
+
+    def _forecast(self, quote: dict, need_by: date, buyer: Buyer, products: dict,
+                  history: list[dict], now: datetime, set_id: str | None = None):
+        """What Policy would decide for this quote now. Nothing is saved, and the Decisions
+        API is not asked. The decision at order time is the one that counts."""
+        return decide({**quote, "need_by": need_by.isoformat()}, buyer.mandate, products, history,
+                      None, self._spent_in_period(buyer.buyer_id, buyer.mandate, now, quote["quote_id"],
+                                                         set_id), now)
+
+    @locked
+    def request_quote(self, buyer: Buyer, product_ids: list[str] | None, amount: float | None,
+                      unit: str | None, need_by: date | str | None,
+                      preferences: dict | None = None) -> dict:
+        """Ranked options for one need. Each option is its own signed quote."""
+        missing = [name for name, value in (("product_ids", product_ids), ("amount", amount),
+                                            ("unit", unit), ("need_by", need_by)) if not value]
+        if missing:
+            return self._ask(buyer, "request_quote", missing=missing,
+                             question="To price this I need: " + ", ".join(missing) + ". Give "
+                                      "product_ids from search_products, the amount and unit "
+                                      '("L" or "KG"), and need_by as a date like 2026-11-16.')
+
+        def refuse(problem: dict) -> dict:
+            self._log(buyer.actor, "request_quote", f"No quote given: {problem['message']}")
+            return problem
+
+        now = self.now()
+        try:
+            need_by = need_by if isinstance(need_by, date) else date.fromisoformat(str(need_by))
+        except ValueError:
+            return refuse(error("bad_date", "need_by must be a date like 2026-11-16."))
+        if need_by < now.date():
+            return refuse(error("need_by_in_past",
+                                f"The need-by date {need_by.isoformat()} is in the past."))
+        unit = str(unit).upper()
+        if unit not in ("L", "KG"):
+            return refuse(error("bad_unit", 'unit must be "L" (litres) or "KG" (kilograms).'))
+        if not (isinstance(amount, (int, float)) and not isinstance(amount, bool)
+                and amount > 0 and math.isfinite(amount)):
+            return refuse(error("bad_amount", "The amount must be a number above zero."))
+
+        ids = list(dict.fromkeys(str(i) for i in product_ids))[:MAX_QUOTE_PRODUCTS]
+        not_offered: list[dict] = []
+        products: dict[str, Any] = {}
+        for pid in ids:
+            product = self.catalog.get_product(pid)
+            if product is None:
+                not_offered.append({"product_id": pid, "name": None,
+                                    "reason": "Not in the Valio Aimo catalog."})
+                continue
+            # A product the mandate would reject outright is never offered.
+            stops = hard_stops({"lines": [{"product_id": pid, "name": product.name_en}]},
+                               buyer.mandate, {pid: product})
+            if stops:
+                not_offered.append({"product_id": pid, "name": product.name_en,
+                                    "reason": " ".join(stops)})
+                continue
+            products[pid] = product
+
+        # One price call and one availability call, before the unit maths, which reuses them.
+        offers = self._offers(list(products), need_by) if products else {}
+        if "code" in offers and "retryable" in offers:
+            return refuse(offers)
+
+        candidates = []
+        for pid, product in products.items():
+            offer = offers.get(pid)
+            if offer is None or not offer.orderable:
+                not_offered.append({"product_id": pid, "name": product.name_en,
+                                    "reason": f"Cannot be ordered for {need_by.isoformat()}."})
+                continue
+            try:
+                plan = self.catalog.units_needed(pid, amount, unit)
+            except Exception:
+                sold_by = "weight, not volume" if unit == "L" else "volume, not weight"
+                not_offered.append({"product_id": pid, "name": product.name_en,
+                                    "reason": f"It is sold by {sold_by}, so it cannot be ordered in {unit}."})
+                continue
+            candidates.append(self._candidate(product, plan, offer))
+
+        prefs = preferences or {}
+        ranked = ranking.rank(candidates, need_by, prefs.get("priorities"), prefs.get("pack_size"))
+        plans = ranking.options(ranked, amount, need_by, MAX_OPTIONS)
+        offered = {line.candidate.product_id for plan in plans for line in plan.lines}
+        for c in ranked:
+            if c.short and c.product_id not in offered:
+                in_stock = c.available_units * c.content_per_unit
+                not_offered.append({"product_id": c.product_id, "name": c.name,
+                                    "reason": f"Only {in_stock:g} {c.content_unit} is in stock, less "
+                                              f"than the {amount:g} {unit} asked for."})
+
+        set_id = _new_id("qs")
+        history = self._history(buyer.buyer_id)
+        options = []
+        for rank_no, plan in enumerate(plans, 1):
+            quote = self._issue_quote(list(plan.lines), need_by, now, buyer.buyer_id, set_id,
+                                      rank_no, plan.label)
+            decision = self._forecast(quote, need_by, buyer, products, history, now)
+            options.append({"rank": rank_no, "label": plan.label, "trade_off": plan.trade_off,
+                            "expected": {"status": decision.status, "reasons": decision.reasons},
+                            "quote": quote})
+            self._log(buyer.actor, "request_quote",
+                      f"Option {rank_no} of {len(plans)} ({plan.label}) for {buyer.name}: "
+                      f"{plan.trade_off} Total {eur(quote['total_eur'])} without VAT, valid for "
+                      "15 minutes. The stock hold is simulated.", quote_id=quote["quote_id"])
+        if not options:
+            self._log(buyer.actor, "request_quote",
+                      f"Nothing could be offered for {amount:g} {unit} by {need_by.isoformat()}: "
+                      f"{len(not_offered)} products were left out.")
+        return {"status": "ok", "set_id": set_id,
+                "asked": {"amount": amount, "unit": unit, "need_by": need_by.isoformat()},
+                "options": options, "not_offered": not_offered}
 
     # Orders
 
     @locked
     def place_order(self, quote_id: str, mandate_token: str, rationale: str,
-                    confirm_unusual: bool = False, agent_signature: str | None = None,
-                    caller: dict | None = None) -> dict:
-        """caller is the authenticated agent ({buyer_id, agent_id, mandate_id}) when the call
-        came over HTTP; None for in-process calls."""
-        return self._place_order(quote_id, mandate_token, rationale, confirm_unusual, agent_signature,
-                                 caller)
+                    agent_signature: str | None = None) -> dict:
+        return self._place_order(quote_id, mandate_token, rationale, agent_signature)
 
     def _refuse(self, quote_id: str, reason: str) -> dict:
         """A refusal that is not tied to an order, so it cannot use up someone's quote."""
@@ -338,34 +583,81 @@ class Service:
         result = {"status": order["status"], "order_id": order["order_id"]}
         if order["approval_id"]:
             result["approval_id"] = order["approval_id"]
-        if order["question"]:
-            result["question"] = order["question"]
         result["reasons"] = json.loads(order["reasons_json"])
+        if order["alternatives_json"] and order["status"] != "confirmed":
+            result["alternatives"] = json.loads(order["alternatives_json"])
         return result
 
     def _order(self, **where: str) -> sqlite3.Row | None:
         (column, value), = where.items()
         return self.conn.execute(f"SELECT * FROM orders WHERE {column} = ?", (value,)).fetchone()
 
+    def _history(self, buyer_id: str) -> list[dict]:
+        return [dict(row) for row in self.conn.execute(
+            "SELECT category, amount, content_unit FROM order_history WHERE buyer_id = ?", (buyer_id,))]
+
+    def _live_siblings(self, set_id: str, quote_id: str) -> list[sqlite3.Row]:
+        """Orders from the same request, other than this quote's, that are confirmed or waiting."""
+        return self.conn.execute(
+            "SELECT o.* FROM orders o JOIN quotes q USING (quote_id) WHERE q.set_id = ? "
+            "AND o.quote_id != ? AND o.status IN ('confirmed', 'pending_approval')",
+            (set_id, quote_id)).fetchall()
+
+    def _withdraw(self, order: sqlite3.Row, actor: str, now: datetime) -> None:
+        """Marks a waiting order rejected and closes its approval; it never commits or logs."""
+        reasons = json.loads(order["reasons_json"]) + [WITHDRAWN]
+        self.conn.execute(
+            "UPDATE orders SET status = 'rejected', reasons_json = ?, alternatives_json = NULL "
+            "WHERE order_id = ?", (json.dumps(reasons), order["order_id"]))
+        self.conn.execute(
+            "UPDATE approvals SET status = 'rejected', decided_by = ?, decided_at = ? "
+            "WHERE order_id = ? AND status = 'pending'",
+            (actor, now.isoformat(), order["order_id"]))
+
+    def _alternatives(self, set_id: str, quote_id: str, buyer: Buyer, history: list[dict],
+                      now: datetime) -> list[dict]:
+        """Other options from the same request that Policy would confirm on their own, best first.
+
+        Orders from this request are not counted against their budget: they would replace them.
+        """
+        found = []
+        rows = self.conn.execute(
+            "SELECT * FROM quotes WHERE set_id = ? AND quote_id != ? ORDER BY rank",
+            (set_id, quote_id)).fetchall()
+        for row in rows:
+            quote = {**json.loads(row["body_json"]), "signature": row["signature"]}
+            try:
+                need_by = signing.check_quote(quote, self.key.public_key(), now)
+            except signing.QuoteError:
+                continue  # expired, or changed after it was issued
+            if self._order(quote_id=row["quote_id"]) is not None:
+                continue  # already ordered
+            products = {l["product_id"]: self.catalog.get_product(l["product_id"])
+                        for l in quote["lines"]}
+            products = {pid: p for pid, p in products.items() if p is not None}
+            if self._forecast(quote, need_by, buyer, products, history, now, set_id).status != "confirmed":
+                continue
+            summary = " + ".join(f"{l['units']:,} × {l['sales_unit']} {l['name']} "
+                                 f"({l['covers']:g} {l['content_unit']})" for l in quote["lines"])
+            found.append({"quote_id": row["quote_id"], "rank": row["rank"], "label": row["label"],
+                          "summary": summary, "total_eur": quote["total_eur"]})
+            if len(found) == MAX_ALTERNATIVES:
+                break
+        return found
+
     def _place_order(self, quote_id: str, mandate_token: str, rationale: str,
-                     confirm_unusual: bool, agent_signature: str | None = None,
-                     caller: dict | None = None) -> dict:
+                     agent_signature: str | None = None) -> dict:
         now = self.now()
         try:
             buyer_id, mandate = verify_mandate(mandate_token, self.conn, now.date())
         except MandateError as e:
-            self._log(caller["agent_id"] if caller else "unknown agent", "place_order",
-                      f"Asked to order quote {quote_id} without a valid mandate.")
+            self._log("unknown agent", "place_order", f"Asked to order quote {quote_id} without a "
+                      "valid mandate.")
             return self._refuse(quote_id, f"The mandate was not accepted. {e}")
-        if caller is not None and caller["buyer_id"] != buyer_id:
-            self._log(caller["agent_id"], "place_order",
-                      f"Asked to order quote {quote_id} with the mandate of {mandate['buyer']}, "
-                      "a kitchen this agent is not registered for.")
-            return self._refuse(quote_id, OTHER_KITCHEN)
         actor = str(mandate["agent_id"])
         signed_by_agent = "agent_key" in mandate
         if signed_by_agent:
-            problem = signing.order_signature_problem(agent_signature, mandate, quote_id, confirm_unusual)
+            problem = signing.order_signature_problem(agent_signature, mandate, quote_id)
             if problem:
                 self._log("unknown agent", "place_order",
                           f"Asked to order quote {quote_id} for {mandate['buyer']} with a copy of its "
@@ -373,8 +665,7 @@ class Service:
                 return self._refuse(quote_id, problem)
         quote_row = self.conn.execute("SELECT * FROM quotes WHERE quote_id = ?", (quote_id,)).fetchone()
         self._log(actor, "place_order",
-                  f"Asked to order quote {quote_id} for {mandate['buyer']}"
-                  f"{' and confirmed the unusual amount' if confirm_unusual else ''}. "
+                  f"Asked to order quote {quote_id} for {mandate['buyer']}. "
                   f"{'The order is signed by the agent key named in the mandate. ' if signed_by_agent else ''}"
                   f"The agent's reason: \"{rationale[:500]}\"",
                   quote_id=quote_id if quote_row else None)
@@ -383,42 +674,50 @@ class Service:
         if existing is not None:
             if existing["buyer_id"] != buyer_id:
                 return self._refuse(quote_id, "This quote has already been used by another buyer.")
-            if not (existing["status"] == "needs_clarification" and confirm_unusual):
-                return self._order_result(existing)
+            return self._order_result(existing)
 
         if quote_row is None:
             return self._refuse(quote_id, f"There is no quote with id {quote_id}. Request a new quote.")
+        if quote_row["buyer_id"] and quote_row["buyer_id"] != buyer_id:
+            return self._refuse(quote_id, "This quote was issued to another buyer.")
         quote = {**json.loads(quote_row["body_json"]), "signature": quote_row["signature"]}
         try:
             need_by = signing.check_quote(quote, self.key.public_key(), now)
         except signing.QuoteError as e:
             return self._refuse(quote_id, str(e))
+        set_id = quote_row["set_id"]
+        waiting: list[sqlite3.Row] = []
+        if set_id:
+            siblings = self._live_siblings(set_id, quote_id)
+            for order in siblings:
+                if order["status"] == "confirmed":
+                    return self._refuse(quote_id, f"This request was already ordered as "
+                                                  f"{order['order_id']}. Request a new quote to order again.")
+            waiting = siblings
 
         products = {l["product_id"]: self.catalog.get_product(l["product_id"]) for l in quote["lines"]}
         products = {pid: p for pid, p in products.items() if p is not None}
-        history = [dict(row) for row in self.conn.execute(
-            "SELECT category, amount, content_unit FROM order_history WHERE buyer_id = ?", (buyer_id,))]
-        if existing is not None:
-            # The agent is confirming an amount it was asked about. Keep the flag, don't re-score.
-            ai_unusual = next((r for r in json.loads(existing["reasons_json"])
-                               if r.startswith(REASON_PREFIX)), None)
-        else:
-            ai_unusual = self._ai_unusual(mandate["buyer"], history, quote, products, quote_id)
+        history = self._history(buyer_id)
+        ai_unusual = self._ai_unusual(mandate["buyer"], history, quote, products, quote_id)
         decision = decide({**quote, "need_by": need_by.isoformat()}, mandate, products, history,
-                          confirm_unusual, ai_unusual,
-                          self._spent_in_period(buyer_id, mandate, now, quote_id))
+                          ai_unusual, self._spent_in_period(buyer_id, mandate, now, quote_id, set_id), now)
+        alternatives = []
+        if decision.status != "confirmed" and set_id:
+            alternatives = self._alternatives(set_id, quote_id, Buyer(buyer_id, mandate), history, now)
 
-        order_id = existing["order_id"] if existing else _new_id("ord")
+        order_id = _new_id("ord")
         approval_id = _new_id("apr") if decision.status == "pending_approval" else None
+        withdrawn = waiting if decision.status != "rejected" else []
         with transaction(self.conn):
+            for order in withdrawn:
+                self._withdraw(order, actor, now)
             self.conn.execute(
                 "INSERT INTO orders (order_id, quote_id, buyer_id, mandate_id, status, approval_id, "
-                "question, reasons_json, rationale, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT (order_id) DO UPDATE SET status = excluded.status, "
-                "approval_id = excluded.approval_id, question = excluded.question, "
-                "reasons_json = excluded.reasons_json, rationale = excluded.rationale",
+                "reasons_json, rationale, created_at, alternatives_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (order_id, quote_id, buyer_id, mandate["mandate_id"], decision.status, approval_id,
-                 decision.question, json.dumps(decision.reasons), rationale, now.isoformat()),
+                 json.dumps(decision.reasons), rationale, now.isoformat(),
+                 json.dumps(alternatives) if alternatives else None),
             )
             if approval_id:
                 self.conn.execute(
@@ -426,20 +725,34 @@ class Service:
                     "VALUES (?, ?, 'pending', ?)",
                     (approval_id, order_id, json.dumps(mandate.get("approvers", []))),
                 )
+        for order in withdrawn:
+            self._log(actor, "order:withdrawn",
+                      f"{WITHDRAWN} Order {order['order_id']} no longer waits for approval.",
+                      order_id=order["order_id"], quote_id=order["quote_id"])
         self._log("policy", f"decision:{decision.status}", " ".join(decision.reasons),
                   order_id=order_id, quote_id=quote_id)
+        if alternatives:
+            self._log("policy", "alternatives",
+                      "Alternatives from the same request that would go through without a person: "
+                      + "; ".join(f"{a['summary']} for {eur(a['total_eur'])}" for a in alternatives) + ".",
+                      order_id=order_id, quote_id=quote_id)
         return self._order_result(self._order(order_id=order_id))
 
-    def _spent_in_period(self, buyer_id: str, mandate: dict, now: datetime, quote_id: str) -> float:
-        """What this buyer's other live orders in the current budget period add up to, in euros."""
+    def _spent_in_period(self, buyer_id: str, mandate: dict, now: datetime, quote_id: str,
+                         set_id: str | None = None) -> float:
+        """What this buyer's other live orders in the current budget period add up to, in euros.
+
+        Orders whose quote belongs to set_id are left out: the new order would replace them.
+        """
         budget = mandate.get("budget")
         if not budget:
             return 0.0
         rows = self.conn.execute(
             "SELECT q.body_json FROM orders o JOIN quotes q USING (quote_id) "
             "WHERE o.buyer_id = ? AND o.quote_id != ? AND o.created_at >= ? "
-            "AND o.status IN ('confirmed', 'pending_approval')",
-            (buyer_id, quote_id, period_start(budget["period"], now).isoformat()))
+            "AND o.status IN ('confirmed', 'pending_approval') "
+            "AND (? IS NULL OR q.set_id IS NULL OR q.set_id != ?)",
+            (buyer_id, quote_id, period_start(budget["period"], now).isoformat(), set_id, set_id))
         return round(sum(json.loads(row["body_json"])["total_eur"] for row in rows), 2)
 
     def _ai_unusual(self, buyer: str, history: list[dict], quote: dict, products: dict,
@@ -456,7 +769,7 @@ class Service:
             self._log(MODEL, "unusual_score", "No score from Google's Decisions API. The 5 times "
                       "rule still applies on its own.", quote_id=quote_id)
             return None
-        verdict = "unusual, so the agent is asked" if score >= THRESHOLD else "not unusual"
+        verdict = "unusual, so a person is asked" if score >= THRESHOLD else "not unusual"
         self._log(MODEL, "unusual_score", f"Scored {score:.2f} that this amount is unusual for "
                   f"{buyer}: {verdict}. The 5 times rule also applies.", quote_id=quote_id)
         return flag_reason(score) if score >= THRESHOLD else None

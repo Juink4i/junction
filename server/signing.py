@@ -83,10 +83,9 @@ UNSIGNED_ORDER = ("This mandate names an agent key, and the order was not signed
                   "A copy of the mandate alone cannot place orders.")
 
 
-def order_signature_problem(signature, mandate: dict, quote_id: str, confirm_unusual: bool) -> str | None:
+def order_signature_problem(signature, mandate: dict, quote_id: str) -> str | None:
     """None if the agent key named in the mandate signed exactly this order, else a plain reason."""
-    expected = {"quote_id": quote_id, "mandate_id": mandate["mandate_id"],
-                "confirm_unusual": bool(confirm_unusual)}
+    expected = {"quote_id": quote_id, "mandate_id": mandate["mandate_id"]}
     try:
         signed = verify(signature if isinstance(signature, str) else "",
                         load_public(mandate["agent_key"]))

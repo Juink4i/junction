@@ -24,7 +24,8 @@ TOOLS = {
     "get_approval_status",
     "get_audit_log",
 }
-SUMMARY_KEYS = {"id", "name_en", "name_fi", "category", "sales_unit", "tags", "labels"}
+SUMMARY_KEYS = {"id", "name_en", "name_fi", "category", "sales_unit", "tags", "labels", "properties"}
+
 PRODUCT_KEYS = SUMMARY_KEYS | {
     "allergens_contains",
     "allergens_may_contain",
@@ -49,6 +50,7 @@ LINE_KEYS = {
     "line_total_eur",
     "available_date",
     "cutoff_passed",
+    "closing_time",
     "stock",
 }
 LOG_KEYS = {"seq", "time", "actor", "action", "reason", "prev_hash", "hash"}
@@ -61,10 +63,13 @@ def anyio_backend():
 
 
 @pytest.fixture(autouse=True)
-def tokens():
+def tokens(monkeypatch):
     svc = Service(connect(":memory:"), fake_catalog, lambda: datetime.now(timezone.utc))
     server_app.use_service(svc)
-    yield issue_demo_mandates(svc.conn)
+    issued = issue_demo_mandates(svc.conn)
+    # An in-process client has no headers, so say which mandate the connection showed.
+    monkeypatch.setattr(server_app, "_token", lambda ctx: issued["hotel"])
+    yield issued
     server_app.use_service(None)
 
 
@@ -76,8 +81,10 @@ async def call(client, name, **args):
 
 
 async def quote_milk(client, litres):
-    return await call(client, "request_quote", need_by=NEED_BY,
-                      lines=[{"product_id": "464201", "amount": litres, "unit": "L"}])
+    """The best option's quote for this much lactose-free milk."""
+    result = await call(client, "request_quote", product_ids=["464201"], amount=litres,
+                        unit="L", need_by=NEED_BY)
+    return result["options"][0]["quote"]
 
 
 async def test_server_name_and_exactly_six_tools():
@@ -92,24 +99,24 @@ async def test_tool_inputs_match_the_contract():
         tools = {t.name: t.input_schema for t in (await client.list_tools()).tools}
     inputs = {name: (set(s["properties"]), set(s.get("required", []))) for name, s in tools.items()}
     assert inputs == {
-        "search_products": ({"text", "category", "must_have_tags"}, {"text"}),
+        "search_products": ({"product", "must_have", "amount", "unit"}, set()),
         "get_product": ({"product_id"}, {"product_id"}),
-        "request_quote": ({"lines", "need_by"}, {"lines", "need_by"}),
-        "place_order": ({"quote_id", "mandate_token", "rationale", "confirm_unusual", "agent_signature"},
-                        {"quote_id", "mandate_token", "rationale"}),
+        "request_quote": ({"product_ids", "amount", "unit", "need_by", "preferences"}, set()),
+        "place_order": ({"quote_id", "rationale", "agent_signature"}, {"quote_id", "rationale"}),
         "get_approval_status": ({"approval_id"}, {"approval_id"}),
         "get_audit_log": ({"order_id", "quote_id"}, set()),
     }
 
 
-async def test_search_products_returns_product_summaries():
+async def test_search_products_returns_what_fits_and_what_was_dropped():
     async with Client(mcp) as client:
-        found = await call(
-            client, "search_products", text="milk", category="10400",
-            must_have_tags=["FREE_FROM_LACTOSE"],
-        )
-    assert found
-    assert all(set(p) == SUMMARY_KEYS for p in found)
+        found = await call(client, "search_products", product="lactose-free milk")
+        asked = await call(client, "search_products", product="milk", must_have=["organic"])
+    assert set(found) == {"status", "understood", "products", "dropped", "screened_by",
+                          "total_matches", "truncated"}
+    assert found["products"] and all(set(p) == SUMMARY_KEYS for p in found["products"])
+    assert all(set(d) == {"id", "name", "reason"} for d in found["dropped"])
+    assert set(asked) == {"status", "missing", "unknown", "known_properties", "question"}
 
 
 async def test_get_product_returns_product():
@@ -124,20 +131,27 @@ async def test_get_product_unknown_id_returns_structured_error():
     assert set(error) == {"code", "message", "retryable"}
 
 
-async def test_request_quote_returns_quote():
+async def test_request_quote_returns_ranked_options():
     async with Client(mcp) as client:
-        quote = await quote_milk(client, 1000)
-    assert set(quote) == QUOTE_KEYS
-    assert all(set(line) == LINE_KEYS for line in quote["lines"])
-    assert quote["lines"][0]["stock"] in {"confirmed", "unconfirmed"}
-    assert quote["total_eur"] == 1560.0
+        result = await call(client, "request_quote", product_ids=["464201", "464179"], amount=1000,
+                            unit="L", need_by=NEED_BY)
+        asked = await call(client, "request_quote", product_ids=["464201"])
+    assert set(result) == {"status", "set_id", "asked", "options", "not_offered"}
+    best = result["options"][0]
+    assert set(best) == {"rank", "label", "trade_off", "expected", "quote"}
+    assert set(best["expected"]) == {"status", "reasons"}
+    assert set(best["quote"]) == QUOTE_KEYS
+    assert all(set(line) == LINE_KEYS for line in best["quote"]["lines"])
+    assert best["quote"]["lines"][0]["stock"] in {"confirmed", "unconfirmed"}
+    assert best["quote"]["total_eur"] == 1560.0
+    assert asked["status"] == "needs_clarification"
 
 
 async def test_order_approval_and_log_flow(tokens):
     async with Client(mcp) as client:
         quote = await quote_milk(client, 1000)
         order = await call(client, "place_order", quote_id=quote["quote_id"],
-                           mandate_token=tokens["hotel"], rationale="Best on-time option")
+                           rationale="Best on-time option")
         assert set(order) == {"status", "order_id", "approval_id", "reasons"}
         assert order["status"] == "pending_approval"
 

@@ -41,13 +41,18 @@ def svc(valio):
 
 
 def quote(svc, product_id, litres):
-    return svc.request_quote([{"product_id": product_id, "amount": litres, "unit": "L"}], MONDAY)
+    return svc.quote_lines([{"product_id": product_id, "amount": litres, "unit": "L"}], MONDAY)
 
 
-def test_search_and_details_have_the_contract_fields(svc):
-    found = svc.search_products("", "10400", ["FREE_FROM_LACTOSE"])
-    assert len(found) == 20
-    assert set(svc.get_product("464201")) >= {"allergen_info_missing", "official_substitutes"}
+def test_search_screens_the_real_lactose_free_milks(svc):
+    hotel = svc.authenticate(issue_demo_mandates(svc.conn)["hotel"])
+    found = svc.search_products(hotel, "lactose-free milk", amount=1000, unit="L")
+    assert found["total_matches"] == 34
+    assert (len(found["products"]), len(found["dropped"])) == (25, 9)
+    assert {d["reason"] for d in found["dropped"]} == {
+        "coffee milk or coffee drink", "sour milk", "portion pack"}
+    assert set(svc.get_product("464201")) >= {"allergen_info_missing", "official_substitutes",
+                                              "properties"}
 
 
 def test_units_are_converted_with_real_pack_sizes(svc):

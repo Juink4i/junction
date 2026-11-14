@@ -13,13 +13,13 @@ uv run pytest server
 
 ## Unusual-order check
 
-`place_order` asks Google's Decisions API (`gemini-decision-1`, plain HTTPS, `GEMINI_API_KEY`) how likely the amount is to be unusual for this buyer. A score of 0.8 or more returns `needs_clarification`, the same as the 5× rule. The score can only add a question. If the API is down, slow (4 s timeout) or says "normal", the 5× rule still applies. Each score is logged as `unusual_score` by `gemini-decision-1`. Set `DECISIONS_API=off` to skip it.
+`place_order` asks Google's Decisions API (`gemini-decision-1`, plain HTTPS, `GEMINI_API_KEY`) how likely the amount is to be unusual for this buyer. A score of 0.8 or more sends the order to a person (`pending_approval`), the same as the 5× rule. The score can only add a reason for that person. If the API is down, slow (4 s timeout) or says "normal", the 5× rule still applies. Each score is logged as `unusual_score` by `gemini-decision-1`. Set `DECISIONS_API=off` to skip it.
 
 ## For the agent and the screens
 
-- Pass the contents of `server/mandates/<buyer>.jwt` as `mandate_token`.
+- Send the contents of `server/mandates/<buyer>.jwt` as `X-Mandate: <token>` on every `/mcp` request, with `Authorization: Bearer <session token>` signed by the agent key the mandate names (`agent/identity.py` `session_token`). See Contract B in `docs/runner-tasks.md`.
 - Errors come back as the tool result: `{code, message, retryable}`. List tools wrap it as `{"result": ...}` in structured content.
-- `insufficient_stock` errors say how much is available and name on-time substitutes in `message`.
+- `request_quote` lists what it could not offer under `not_offered`, with the reason. A first choice that is short on stock comes back as a split.
 - `GET /approvals` returns pending approvals only. Each has `approval_id, order_id, quote_id, status, buyer, approvers, reasons, agent_rationale, lines, total_eur, total_with_tax_eur, created_at`.
 - `POST /approvals/{id}/approve|reject` takes an optional JSON body `{"decided_by": "..."}`. 404 if unknown, 409 if already decided.
 - CORS is open so the pages can call from another port.

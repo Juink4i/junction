@@ -8,7 +8,7 @@ import pytest
 from agent.identity import key_path, sign_order
 from server import audit, signing
 from server.mandate import verify_mandate
-from web.tests.world import KID, NEED_BY
+from web.tests.world import KID
 
 
 def decode(token: str) -> dict:
@@ -179,8 +179,8 @@ def test_onboarded_kitchen_edits_in_place_with_its_own_key(client, world):
 
     # The agent still orders with the new mandate, signing the new mandate id.
     token = path.read_text()
-    q = world.svc.request_quote([{"product_id": "464201", "amount": 40, "unit": "L"}], NEED_BY)
-    signature = sign_order(key_path(KID, world.buyers), token, q["quote_id"], False)
+    q = world.quote(token, "464201", 40)
+    signature = sign_order(key_path(KID, world.buyers), token, q["quote_id"])
     result = world.svc.place_order(q["quote_id"], token, "more milk", agent_signature=signature)
     assert result["status"] == "confirmed", result
 

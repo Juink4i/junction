@@ -1,9 +1,8 @@
 """A stand-in for Runner 2's MCP server, so the bot and screens can be built first.
 
-It follows Contract B in docs/runner-tasks.md: the same six tools, the same shapes,
-and the same HTTP endpoints for the approval and log pages. Its rules are a small
-copy of the ones in the plan, good enough for development and tests. The real
-server (server/) replaces it: start that one on port 8000 instead.
+It follows Contract B in docs/runner-tasks.md and reuses the real server's vocabulary,
+keyword rules and ranking. Its Policy is a small copy, good enough for development and
+tests. The real server (server/) replaces it: start that one on port 8000 instead.
 
 Run:  uv run python -m demo.fake_server            (http://localhost:8000/mcp)
 """
@@ -20,14 +19,17 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import jwt
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+
+from server import ranking, vocabulary
+from server.seller import KeywordSeller, Need
 
 ROOT = Path(__file__).resolve().parent.parent
 OVERRIDES_FILE = ROOT / "data" / "overrides.json"
@@ -227,34 +229,6 @@ def _eur(x: float) -> str:
 mcp = MCPServer("valio-aimo-trade", instructions="FAKE development server for Valio Aimo trade tools.")
 
 
-class QuoteLineIn(BaseModel):
-    product_id: str
-    amount: float = Field(gt=0)
-    unit: str = Field(description='"L" or "KG"')
-
-
-@mcp.tool()
-def search_products(text: str, category: str | None = None,
-                    must_have_tags: list[str] | None = None) -> list[dict[str, Any]]:
-    """Search the product file by words in the English or Finnish name, with optional filters."""
-    words = [w for w in text.lower().split() if w]
-    tags = set(must_have_tags or [])
-    out = []
-    for pid in PRODUCTS:
-        p = _product(pid)
-        hay = f"{p['name_en']} {p['name_fi']}".lower()
-        if words and not all(w in hay for w in words):
-            continue
-        if category and p["category"] != category:
-            continue
-        if not tags <= set(p["tags"]):
-            continue
-        out.append(_summary(pid, p))
-    log("buyer agent", "search_products", f'Searched for "{text}" (category {category or "any"}, '
-        f'tags {", ".join(sorted(tags)) or "none"}): {len(out)} products.')
-    return out[:20]
-
-
 @mcp.tool()
 def get_product(product_id: str) -> dict[str, Any]:
     """Full details for one product: allergens, origin, labels, description."""
@@ -265,60 +239,145 @@ def get_product(product_id: str) -> dict[str, Any]:
     return _details(product_id, p)
 
 
-def _substitute_hint(pid: str, need_by: date) -> str:
-    base = PRODUCTS[pid]
-    options = []
-    for other in PRODUCTS:
-        p = _product(other)
-        on_time = date.today() + timedelta(days=p["lead_days"]) <= need_by and not p["cutoff_passed"]
-        if other != pid and p["category"] == base["category"] and set(base["tags"]) <= set(p["tags"]) \
-                and on_time and not any(w in p["name_en"].lower() for w in ("coffee", "latte", "chocolate", "sour")):
-            options.append(f"{other} {p['name_en']} (€{p['unit_price'] / p['content']:.2f} per L)")
-    if not options:
-        return " No substitute with the same tags can arrive on time."
-    return " Substitutes with the same tags that can arrive on time: " + "; ".join(options[:3]) + "."
+ONBOARDING_URL = "http://localhost:8080/onboarding"
+
+
+def _token_of(headers) -> str:
+    """The mandate in X-Mandate. The fake does not check the agent's session token."""
+    return ((headers.get("x-mandate") if headers else None) or "").strip()
+
+
+def _refusal(token: str) -> dict[str, Any]:
+    code = "mandate_invalid" if token else "mandate_missing"
+    return {"code": code, "retryable": False, "onboarding_url": ONBOARDING_URL,
+            "message": "No valid mandate was shown. Connect with the kitchen's mandate in X-Mandate."}
+
+
+def _ask(question: str, missing=(), unknown=()) -> dict[str, Any]:
+    return dict(status="needs_clarification", missing=list(missing), unknown=list(unknown),
+                known_properties=vocabulary.known_names(), question=question)
 
 
 @mcp.tool()
-def request_quote(lines: list[QuoteLineIn], need_by: date) -> dict[str, Any]:
-    """Price and availability for the chosen lines, as a signed quote that expires in 15 minutes."""
+def search_products(ctx: Context, product: str | None = None, must_have: list[str] | None = None,
+                    amount: float | None = None, unit: str | None = None) -> dict[str, Any]:
+    """Find the products that fit a request, in plain words. Dropped products come back with a reason."""
+    token = _token_of(ctx.headers)
+    m = _mandate_for(token)
+    if m is None:
+        return _refusal(token)
+    understood = vocabulary.understand(product or "", must_have)
+    if understood.unknown:
+        return _ask(f"I don't know the product property {', '.join(understood.unknown)}.",
+                    unknown=understood.unknown)
+    if not understood.text:
+        return _ask("What product do you need?", missing=["product"])
+    words, tags = understood.text.split(), set(understood.tags)
+    candidates = []
+    for pid in PRODUCTS:
+        p = _product(pid)
+        hay = f"{p['name_en']} {p['name_fi']}".lower()
+        if (all(w in hay for w in words) and tags <= set(p["tags"])
+                and p["category"] in m["allowed_categories"]):
+            candidates.append(SimpleNamespace(**_summary(pid, p)))
+    need = Need(" ".join(str(product).split()), tuple(vocabulary.names(understood.tags)), amount, unit)
+    verdicts = KeywordSeller().screen(need, candidates).verdicts
+    kept = [vars(c) | {"properties": vocabulary.names(c.tags)} for c in candidates if verdicts[c.id].keep]
+    dropped = [dict(id=c.id, name=c.name_en, reason=verdicts[c.id].reason)
+               for c in candidates if not verdicts[c.id].keep]
+    log(f"{m['agent_id']} ({m['key']})", "search_products",
+        f'Searched for "{understood.text}": kept {len(kept)} and dropped {len(dropped)}.')
+    return dict(status="ok",
+                understood=dict(product=understood.text, must_have=vocabulary.names(understood.tags),
+                                from_mandate=[]),
+                products=kept, dropped=dropped, screened_by="keyword rules",
+                total_matches=len(candidates), truncated=False)
+
+
+def _quote(lines, need_by: date) -> dict[str, Any]:
     out_lines = []
-    for ln in lines:
-        p = _product(ln.product_id)
-        if p is None:
-            raise _error("not_found", f"No product {ln.product_id}.")
-        if ln.unit.upper() != _content_unit(p):
-            raise _error("bad_unit", f"{ln.product_id} is sold by {_content_unit(p)}, not {ln.unit}.")
-        units = math.ceil(round(ln.amount / p["content"], 6))
-        stock = "unconfirmed"
-        avail = p.get("available_units")
-        if avail is not None:
-            stock = "confirmed"
-            if int(avail) < units:  # same error and wording as the real server (server/service.py)
-                unit = _content_unit(p)
-                log("buyer agent", "request_quote", f"No quote given: only {avail} units of "
-                    f"{p['name_en']} available.")
-                return {"code": "insufficient_stock", "retryable": False, "message": (
-                    f"Only {avail} sales units of {p['name_en']} ({ln.product_id}) are available, which "
-                    f"covers {int(avail) * p['content']:g} {unit} of the {units * p['content']:g} {unit} "
-                    f"asked for. Quote what is available and cover the rest with a substitute."
-                    + _substitute_hint(ln.product_id, need_by))}
-        available = date.today() + timedelta(days=p["lead_days"])
+    for line in lines:
+        c = line.candidate
         out_lines.append(dict(
-            product_id=ln.product_id, name=p["name_en"], units=units, sales_unit=p["sales_unit"],
-            covers=round(units * p["content"], 3), content_unit=_content_unit(p),
-            unit_price_eur=p["unit_price"], line_total_eur=round(units * p["unit_price"], 2),
-            available_date=available.isoformat(), cutoff_passed=p["cutoff_passed"], stock=stock))
+            product_id=c.product_id, name=c.name, units=line.units, sales_unit=c.sales_unit,
+            covers=line.covers, content_unit=c.content_unit, unit_price_eur=c.unit_price_eur,
+            line_total_eur=line.total_eur, available_date=c.available_date.isoformat(),
+            cutoff_passed=c.cutoff_passed, closing_time=None,
+            stock="confirmed" if c.available_units is not None else "unconfirmed"))
     total = round(sum(ln["line_total_eur"] for ln in out_lines), 2)
     quote = dict(quote_id=f"q_{uuid.uuid4().hex[:10]}", lines=out_lines, total_eur=total,
                  total_with_tax_eur=round(total * (1 + TAX_RATE), 2),
                  expires_at=(_now() + QUOTE_TTL).isoformat(timespec="seconds"))
     quote["signature"] = _sign(quote)
-    with STATE.lock:
-        STATE.quotes[quote["quote_id"]] = quote | {"need_by": need_by.isoformat()}
-    log("buyer agent", "request_quote", f"Quote {quote['quote_id']}: {len(out_lines)} line(s), "
-        f"{_eur(total)} before tax, need by {need_by.isoformat()}.", refs=(quote["quote_id"],))
     return quote
+
+
+@mcp.tool()
+def request_quote(ctx: Context, product_ids: list[str] | None = None, amount: float | None = None,
+                  unit: str | None = None, need_by: str | None = None,
+                  preferences: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Ranked options for one need. Each option is its own signed quote, valid for 15 minutes."""
+    token = _token_of(ctx.headers)
+    m = _mandate_for(token)
+    if m is None:
+        return _refusal(token)
+    missing = [name for name, value in (("product_ids", product_ids), ("amount", amount),
+                                        ("unit", unit), ("need_by", need_by)) if not value]
+    if missing:
+        return _ask("To price this I need: " + ", ".join(missing) + ".", missing=missing)
+    try:
+        need = date.fromisoformat(need_by)
+    except ValueError:
+        return {"code": "bad_date", "message": "need_by must be a date like 2026-11-16.",
+                "retryable": False}
+    candidates, not_offered = [], []
+    for pid in dict.fromkeys(product_ids):
+        p = _product(pid)
+        if p is None:
+            not_offered.append(dict(product_id=pid, name=None, reason="Not in the catalog."))
+            continue
+        if unit.upper() != _content_unit(p):
+            not_offered.append(dict(product_id=pid, name=p["name_en"],
+                                    reason=f"It is sold by {_content_unit(p)}, not {unit}."))
+            continue
+        available = p.get("available_units")
+        candidates.append(ranking.Candidate(
+            product_id=pid, name=p["name_en"], sales_unit=p["sales_unit"],
+            content_per_unit=p["content"], content_unit=_content_unit(p),
+            units=math.ceil(round(amount / p["content"], 6)), unit_price_eur=p["unit_price"],
+            unit_price_with_tax_eur=round(p["unit_price"] * (1 + TAX_RATE), 4),
+            available_date=date.today() + timedelta(days=p["lead_days"]), closing_time=None,
+            cutoff_passed=p["cutoff_passed"],
+            available_units=None if available is None else int(available),
+            reliability=p.get("reliability"), country="FI", labels=tuple(p["labels"]),
+            carbon=p.get("carbon")))
+    prefs = preferences or {}
+    ranked = ranking.rank(candidates, need, prefs.get("priorities"), prefs.get("pack_size"))
+    plans = ranking.options(ranked, amount, need)
+    offered = {line.candidate.product_id for plan in plans for line in plan.lines}
+    for c in ranked:
+        if c.short and c.product_id not in offered:
+            not_offered.append(dict(
+                product_id=c.product_id, name=c.name,
+                reason=f"Only {c.available_units * c.content_per_unit:g} {c.content_unit} is in "
+                       f"stock, less than the {amount:g} {unit} asked for."))
+    set_id = f"qs_{uuid.uuid4().hex[:10]}"
+    options = []
+    for rank_no, plan in enumerate(plans, 1):
+        quote = _quote(plan.lines, need)
+        stored = quote | {"need_by": need.isoformat(), "set_id": set_id, "buyer": m["key"],
+                          "rank": rank_no, "label": plan.label}
+        with STATE.lock:
+            STATE.quotes[quote["quote_id"]] = stored
+        status, reasons = _decide(stored, m)
+        options.append(dict(rank=rank_no, label=plan.label, trade_off=plan.trade_off,
+                            expected=dict(status=status, reasons=reasons), quote=quote))
+        log(f"{m['agent_id']} ({m['key']})", "request_quote",
+            f"Option {rank_no} of {len(plans)} ({plan.label}): {plan.trade_off} "
+            f"{_eur(quote['total_eur'])} before tax.", refs=(quote["quote_id"],))
+    return dict(status="ok", set_id=set_id,
+                asked=dict(amount=amount, unit=unit, need_by=need.isoformat()),
+                options=options, not_offered=not_offered)
 
 
 def _mandate_for(token: str) -> dict[str, Any] | None:
@@ -336,7 +395,11 @@ def _mandate_for(token: str) -> dict[str, Any] | None:
     return STATE.buyers.get(kid) or MANDATES.get(f"demo-{kid}")
 
 
-def _decide(quote: dict[str, Any], m: dict[str, Any], confirm_unusual: bool) -> tuple[str, list[str]]:
+
+STORED_ONLY = ("signature", "need_by", "set_id", "buyer", "rank", "label")
+
+
+def _decide(quote: dict[str, Any], m: dict[str, Any]) -> tuple[str, list[str]]:
     reasons_reject, reasons_human = [], []
     for ln in quote["lines"]:
         p = PRODUCTS[ln["product_id"]]
@@ -358,11 +421,8 @@ def _decide(quote: dict[str, Any], m: dict[str, Any], confirm_unusual: bool) -> 
     amount = sum(ln["covers"] for ln in quote["lines"])
     if amount > 5 * m["usual_amount"]:
         ratio = amount / m["usual_amount"]
-        if not confirm_unusual:
-            return "needs_clarification", [f"{amount:,.0f} L is {ratio:.0f}× this buyer's usual "
-                                           f"{m['usual_amount']:,} L."]
-        reasons_human.append(f"{amount:,.0f} L is {ratio:.0f}× this buyer's usual {m['usual_amount']:,} L. "
-                             f"The agent confirmed it, so a person must approve.")
+        reasons_human.append(f"{amount:,.0f} L is {ratio:.0f}× this buyer's usual "
+                             f"{m['usual_amount']:,} L, so a person must approve.")
     if quote["total_eur"] > m["max_order_eur"]:
         reasons_human.append(f"Total {_eur(quote['total_eur'])} is over this buyer's "
                              f"{_eur(m['max_order_eur'])} limit for orders without approval.")
@@ -372,13 +432,13 @@ def _decide(quote: dict[str, Any], m: dict[str, Any], confirm_unusual: bool) -> 
 
 
 @mcp.tool()
-def place_order(quote_id: str, mandate_token: str, rationale: str,
-                confirm_unusual: bool = False, agent_signature: str | None = None) -> dict[str, Any]:
-    """Order a quote. Plain code checks the quote and the buyer's mandate and decides the result.
+def place_order(ctx: Context, quote_id: str, rationale: str,
+                agent_signature: str | None = None) -> dict[str, Any]:
+    """Order a quote. Plain code checks the quote and the connection's mandate and decides.
 
     The fake accepts agent_signature and ignores it. The real server checks it.
     """
-    m = _mandate_for(mandate_token)
+    m = _mandate_for(_token_of(ctx.headers))
     if m is None:
         log("policy", "place_order rejected", "The mandate is missing or its signature is not valid.",
             refs=(quote_id,))
@@ -386,18 +446,31 @@ def place_order(quote_id: str, mandate_token: str, rationale: str,
     actor = f"{m['agent_id']} ({m['key']})"
     with STATE.lock:
         existing = STATE.orders.get(quote_id)
-        if existing and not (existing["status"] == "needs_clarification" and confirm_unusual):
+        if existing:
             return existing["result"]
         quote = STATE.quotes.get(quote_id)
-        if quote is None or _sign({k: v for k, v in quote.items() if k not in ("signature", "need_by")}) \
+        if quote is None or _sign({k: v for k, v in quote.items() if k not in STORED_ONLY}) \
                 != quote["signature"]:
             return dict(status="rejected", reasons=["The quote is unknown or has been changed."])
+        if quote["buyer"] != m["key"]:
+            return dict(status="rejected", reasons=["This quote was issued to another buyer."])
         if datetime.fromisoformat(quote["expires_at"]) < _now():
             return dict(status="rejected", reasons=["The quote has expired. Ask for a new one."])
         log(actor, "place_order", f"Asked to order quote {quote_id}. Agent's reason: {rationale}",
             refs=(quote_id,))
-        status, reasons = _decide(quote, m, confirm_unusual)
+        status, reasons = _decide(quote, m)
         result: dict[str, Any] = dict(status=status, reasons=reasons)
+        if status != "confirmed":
+            others = sorted((q for q in STATE.quotes.values()
+                             if q.get("set_id") == quote["set_id"] and q["quote_id"] != quote_id
+                             and q["quote_id"] not in STATE.orders and _decide(q, m)[0] == "confirmed"),
+                            key=lambda q: q["rank"])[:3]
+            if others:
+                result["alternatives"] = [
+                    dict(quote_id=q["quote_id"], rank=q["rank"], label=q["label"],
+                         summary=" + ".join(f"{ln['units']:,} × {ln['sales_unit']} {ln['name']}"
+                                            for ln in q["lines"]),
+                         total_eur=q["total_eur"]) for q in others]
         order_id = f"o_{quote_id[2:]}"
         if status in ("confirmed", "pending_approval"):
             result["order_id"] = order_id
@@ -410,12 +483,10 @@ def place_order(quote_id: str, mandate_token: str, rationale: str,
                 total_eur=quote["total_eur"], need_by=quote["need_by"], reasons=reasons,
                 rationale=rationale, lines=quote["lines"],
                 created_at=_now().isoformat(timespec="seconds"), decided_by=None, decided_at=None)
-        if status == "needs_clarification":
-            result["question"] = (f"{reasons[0]} Please confirm this amount is intended. If it is, "
-                                  f"place the order again with confirm_unusual set to true.")
         STATE.orders[quote_id] = dict(status=status, result=result)
         log("policy", f"decision: {status}", " ".join(reasons), refs=(quote_id, order_id))
         return result
+
 
 
 @mcp.tool()
@@ -438,6 +509,16 @@ def get_audit_log(order_id: str | None = None, quote_id: str | None = None) -> l
 
 
 # --- HTTP for the screens -------------------------------------------------------------
+
+@mcp.custom_route("/mandate", methods=["GET"])
+async def http_mandate(request: Request) -> JSONResponse:
+    """Is this mandate accepted? The agent asks before it connects."""
+    token = _token_of(request.headers)
+    m = _mandate_for(token)
+    if m is None:
+        return JSONResponse(_refusal(token), 401)
+    return JSONResponse({"buyer_id": m["key"], "buyer": m["buyer"], "agent_id": m["agent_id"]})
+
 
 @mcp.custom_route("/buyers", methods=["POST"])
 async def http_register_buyer(request: Request) -> JSONResponse:
@@ -537,3 +618,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

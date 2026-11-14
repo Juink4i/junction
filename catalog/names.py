@@ -54,3 +54,36 @@ def category_name(code: str) -> str | None:
 
 def allergen_name(code: str) -> str | None:
     return ALLERGEN_NAMES.get(code)
+
+
+# Nutrition claims (the product file's nutritionalClaim ids) in plain words. These are all 21
+# that occur, most common first. A claim is made by the supplier: a product without the claim
+# is treated as not having the property.
+TAG_NAMES = {
+    "FREE_FROM_LACTOSE": "lactose-free",
+    "FREE_FROM_GLUTEN": "gluten-free",
+    "VEGAN": "vegan",
+    "VEGETARIAN": "vegetarian",
+    "FREE_FROM_PRESERVATIVES": "preservative-free",
+    "FREE_FROM_COLOURING_AGENTS": "no colouring agents",
+    "FREE_FROM_ADDITIVES": "additive-free",
+    "NO_ADDED_SUGARS": "no added sugar",
+    "HIGH_FIBRE": "high-fibre",
+    "FREE_FROM_EGGS": "egg-free",
+    "HIGH_PROTEIN": "high-protein",
+    "LOW_SODIUM_SALT": "low-salt",
+    "FREE_FROM_SWEETENERS": "no sweeteners",
+    "FREE_FROM_SOY": "soy-free",
+    "LOW_LACTOSE": "low-lactose",
+    "FREE_FROM_FAT": "fat-free",
+    "FREE_FROM_WHEAT": "wheat-free",
+    "LOW_FAT": "low-fat",
+    "FREE_FROM_ARTIFICIAL_SWEETENERS": "no artificial sweeteners",
+    "FREE_FROM_GMO": "GMO-free",
+    "FREE_FROM_SODIUM_SALT": "salt-free",
+}
+
+
+def tag_name(code: str) -> str:
+    """The plain words for a tag. An unlisted code is shown in lower case rather than hidden."""
+    return TAG_NAMES.get(code) or code.replace("_", " ").lower()

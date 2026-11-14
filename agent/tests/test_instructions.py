@@ -80,3 +80,16 @@ def test_the_preferences_block_holds_no_rule():
     for word in RULE_WORDS:
         assert word not in text, word
     assert not re.search(r"\b\d+\s*(euros?|e)\b", text)
+
+
+def test_the_agent_is_told_nothing_about_the_catalog():
+    text = build_instruction("Hotel Chain Oy", SATURDAY)
+    for word in ("FREE_FROM_LACTOSE", "10400", "maitojuoma", "kahvimaito", "category code"):
+        assert word not in text, word
+    assert "present_options" not in text and "confirm_unusual" not in text
+
+
+def test_the_agent_is_told_to_pass_the_buyers_words_on():
+    text = build_instruction("Hotel Chain Oy", SATURDAY)
+    assert "search_products" in text and "request_quote" in text and "place_order" in text
+    assert "needs_clarification" in text and "pending_approval" in text

@@ -103,18 +103,28 @@ def summarize_result(tool: str, result: Any) -> str:
     """One readable line for a tool result."""
     if isinstance(result, dict) and "error" in result:
         return f"error {result['error'].get('code')}: {result['error'].get('message')}"
-    if tool == "search_products" and isinstance(result, (list, dict)):
-        items = result if isinstance(result, list) else result.get("products", [])
+    if tool in ("search_products", "request_quote") and isinstance(result, dict) \
+            and result.get("status") == "needs_clarification":
+        return f"question: {result.get('question')}"
+    if tool == "search_products" and isinstance(result, dict):
+        items, dropped = result.get("products", []), result.get("dropped", [])
         names = [p.get("name_en") or p.get("name_fi") for p in items if isinstance(p, dict)][:4]
         more = "…" if len(items) > 4 else ""
-        return f"{len(items)} products: " + "; ".join(n for n in names if n) + more
+        return (f"{len(items)} products fit, {len(dropped)} dropped by "
+                f"{result.get('screened_by', 'the server')}: " + "; ".join(n for n in names if n) + more)
     if tool == "get_product" and isinstance(result, dict):
         return f"{result.get('id')} {result.get('name_en')}"
     if tool == "request_quote" and isinstance(result, dict):
-        return (f"quote {result.get('quote_id')}: {len(result.get('lines', []))} line(s), "
-                f"{_eur(result.get('total_eur'))}")
+        options = result.get("options", [])
+        if not options:
+            return f"no options, {len(result.get('not_offered', []))} products left out"
+        best = options[0]
+        return (f"{len(options)} options, best: {_eur(best.get('quote', {}).get('total_eur'))} "
+                f"({best.get('expected', {}).get('status')})")
     if tool == "place_order" and isinstance(result, dict):
-        return f"{result.get('status')}: " + " ".join(result.get("reasons", []))
+        alternatives = len(result.get("alternatives") or [])
+        extra = f" ({alternatives} alternatives offered)" if alternatives else ""
+        return f"{result.get('status')}: " + " ".join(result.get("reasons", [])) + extra
     if tool == "get_approval_status" and isinstance(result, dict):
         who = f" by {result['decided_by']}" if result.get("decided_by") else ""
         return f"{result.get('status')}{who}"

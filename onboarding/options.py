@@ -5,13 +5,13 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from catalog.names import ALLERGEN_NAMES, CATEGORY_NAMES
+from catalog.names import ALLERGEN_NAMES, CATEGORY_NAMES, TAG_NAMES
 
 # The 14 allergens EU law requires on labels, as GS1 codes.
 EU_ALLERGEN_CODES = ("AW", "AC", "AE", "AF", "AP", "AY", "AM", "AN", "BC", "BM", "AS", "AU", "NL", "UM")
 ALLERGENS = {code: ALLERGEN_NAMES[code] for code in EU_ALLERGEN_CODES}
 CATEGORIES = dict(CATEGORY_NAMES)
-TAGS = {"FREE_FROM_LACTOSE": "lactose-free", "VEGAN": "vegan"}
+TAGS = dict(TAG_NAMES)  # every nutrition claim in the product file, most common first
 WEEKDAYS = {"MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "Thursday",
             "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday"}
 PRIORITIES = {"price": "the lowest price", "reliability": "reliable delivery",

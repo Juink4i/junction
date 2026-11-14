@@ -30,13 +30,13 @@ async def test_hotel_order_goes_to_a_person_and_is_approved(fake):
     script = ScriptedLlm(steps=[
         lambda _: ("call", "record_request", {"product": "lactose-free milk", "amount": 1000,
                                               "unit": "L", "need_by": MONDAY,
-                                              "must_have": ["FREE_FROM_LACTOSE"]}),
-        lambda _: ("call", "search_products", {"text": "", "category": "10400",
-                                               "must_have_tags": ["FREE_FROM_LACTOSE"]}),
-        lambda _: ("call", "request_quote", {"lines": [{"product_id": "464201", "amount": 1000,
-                                                        "unit": "L"}], "need_by": MONDAY}),
-        lambda last: ("call", "place_order", {"quote_id": last["quote_id"],
-                                              "rationale": "Cheapest option that arrives on time."}),
+                                              "must_have": ["lactose-free"]}),
+        lambda _: ("call", "search_products", {"product": "lactose-free milk", "amount": 1000,
+                                               "unit": "L"}),
+        lambda last: ("call", "request_quote", {"product_ids": [p["id"] for p in last["products"]],
+                                                "amount": 1000, "unit": "L", "need_by": MONDAY}),
+        lambda last: ("call", "place_order", {"quote_id": last["options"][0]["quote"]["quote_id"],
+                                              "rationale": "Best option that arrives on time."}),
         lambda last: ("call", "get_approval_status", {"approval_id": last["approval_id"]}),
         lambda _: ("text", "Ordered 1,000 × 1 L. Approved by the procurement manager."),
     ])
@@ -54,7 +54,7 @@ async def test_hotel_order_goes_to_a_person_and_is_approved(fake):
     assert result.orders[0]["status"] == "pending_approval"
     assert result.summary.startswith("Ordered 1,000")
     kinds = [e["kind"] for e in sink.history]
-    for kind in ("run_start", "user", "request", "tool_call", "tool_result", "decision", "waiting",
+    for kind in ("run_start", "user", "request", "tool_call", "tool_result", "options", "decision", "waiting",
                  "agent", "run_end"):
         assert kind in kinds, kind
 
@@ -62,7 +62,7 @@ async def test_hotel_order_goes_to_a_person_and_is_approved(fake):
 # The step budget: a run may make so many model calls since the buyer last said something.
 
 def _search(_):
-    return ("call", "search_products", {"text": "coffee"})
+    return ("call", "search_products", {"product": "coffee"})
 
 
 def _searches(events):
@@ -112,3 +112,31 @@ async def test_no_answer_does_not_reset_the_step_budget(fake):
 
     assert _searches(sink.history) == 3
     assert "4 steps" in result.summary
+
+
+async def test_a_refused_mandate_ends_the_run_with_the_onboarding_link(monkeypatch):
+    from agent.mcp_link import MandateRefused
+
+    class Refusing:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            raise MandateRefused("mandate_expired", "The mandate expired on 2026-01-01.",
+                                 "http://localhost:8080/onboarding")
+
+        async def __aexit__(self, *exc):
+            return None
+
+    monkeypatch.setattr("agent.runner.TradeLink", Refusing)
+    sink = EventSink(None, console=False)
+    settings = Settings(server_url="unused", web_url=None, model=ScriptedLlm(steps=[]),
+                        mandate_token="old-token")
+
+    result = await run_buyer("Milk, please", settings, sink, make_ask([], interactive=False))
+
+    assert result.outcome is None
+    assert "expired on 2026-01-01" in result.mandate_problem
+    note = next(e for e in sink.history if e["kind"] == "note")
+    assert "http://localhost:8080/onboarding" in note["text"]
+    assert sink.history[-1]["kind"] == "run_end"

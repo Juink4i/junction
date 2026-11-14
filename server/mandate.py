@@ -16,7 +16,11 @@ BUYER_ID = re.compile(r"[a-z0-9-]{3,64}")
 
 
 class MandateError(Exception):
-    pass
+    """Why a mandate was not accepted. `code` is mandate_missing, mandate_invalid or mandate_expired."""
+
+    def __init__(self, message: str, code: str = "mandate_invalid"):
+        super().__init__(message)
+        self.code = code
 
 
 def _text(value) -> bool:
@@ -107,7 +111,7 @@ def check_mandate(token: str, public_key, today: date) -> dict:
     except (KeyError, TypeError, ValueError):
         raise MandateError("The mandate's valid_until date is missing or not readable.")
     if today > valid_until:
-        raise MandateError(f"The mandate expired on {valid_until.isoformat()}.")
+        raise MandateError(f"The mandate expired on {valid_until.isoformat()}.", code="mandate_expired")
     return mandate
 
 

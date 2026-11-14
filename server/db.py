@@ -67,12 +67,29 @@ CREATE TABLE IF NOT EXISTS log (
 """
 
 
+# Columns added after the first version. CREATE TABLE IF NOT EXISTS leaves an existing table
+# as it is, so these are added one by one when a database is opened.
+ADDED_COLUMNS = {
+    "quotes": (("buyer_id", "TEXT"), ("set_id", "TEXT"), ("rank", "INTEGER"), ("label", "TEXT")),
+    "orders": (("alternatives_json", "TEXT"),),
+}
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    for table, columns in ADDED_COLUMNS.items():
+        have = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, kind in columns:
+            if name not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
+
+
 def connect(path: str | Path = STATE_DB) -> sqlite3.Connection:
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _add_missing_columns(conn)
     return conn
 
 

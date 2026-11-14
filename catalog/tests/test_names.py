@@ -20,3 +20,19 @@ def test_the_14_eu_allergens_have_names():
 
 def test_unknown_allergen_code_is_none():
     assert api.allergen_name("X99") is None
+
+
+def test_every_nutrition_claim_in_the_product_file_has_a_name(catalog_db):
+    import sqlite3
+
+    from catalog.names import TAG_NAMES
+
+    con = sqlite3.connect(catalog_db)
+    codes = {row[0] for row in con.execute(
+        "SELECT DISTINCT value FROM products, json_each(products.tags)")}
+    assert codes == set(TAG_NAMES)
+
+
+def test_an_unlisted_tag_is_shown_in_lower_case_not_hidden():
+    assert api.tag_name("FREE_FROM_LACTOSE") == "lactose-free"
+    assert api.tag_name("SOME_NEW_CLAIM") == "some new claim"

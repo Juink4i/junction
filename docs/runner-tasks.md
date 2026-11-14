@@ -46,44 +46,60 @@ Offer:          product_id, unit_price_eur, unit_price_with_tax_eur, comparison_
                 available_units: int | None          # None means unknown, never show 999999
 ```
 
-## Contract B: MCP tools (Runner 2 provides, Runner 3 calls)
+## Contract B: MCP tools (the server provides, any buyer agent calls)
 
 Server name `valio-aimo-trade`, served over HTTP at `http://localhost:8000/mcp`.
 
+**Connection.** Only the agent of a registered kitchen may call `/mcp`. Every HTTP request to `/mcp` carries two headers:
+- `X-Mandate: <the kitchen's signed mandate token>`. It must verify against the kitchen's registered key, be in date, and name an `agent_key`.
+- `Authorization: Bearer <agent session token>`: a JWS (EdDSA) signed by that agent key. Header `kid` = the mandate's `agent_id`. Claims: `aud: "valio-aimo-trade"`, `mandate_id` (the mandate's), `iat`, and `exp` at most 15 minutes after `iat`. Clocks may differ by 60 seconds.
+
+Anything else gets 401 `{code, message, retryable: false, onboarding_url}` with `WWW-Authenticate: Bearer`. The codes are `agent_not_authenticated`, `mandate_not_accepted`, `agent_key_missing` and `agent_token_invalid`. Every refusal is logged as actor `unknown agent`, action `connect:refused`. Every tool call checks the mandate again (`mandate_missing`, `mandate_invalid`, `mandate_expired`), and tools log the mandate's `agent_id` as the actor. An agent reads only its own kitchen's approvals and audit log. `GET /mandate` with an `X-Mandate` header answers 200 `{buyer_id, buyer, agent_id, mandate_id, valid_until}` or 401 with the reason.
+
 | Tool | Input | Output |
 |---|---|---|
-| `search_products` | `text`, `category?`, `must_have_tags?` | list of `ProductSummary` |
+| `search_products` | `product`, `must_have?`, `amount?`, `unit?` (plain words, no codes) | `SearchResult` |
 | `get_product` | `product_id` | `Product` |
-| `request_quote` | `lines: [{product_id, amount, unit}]`, `need_by: date` | `Quote` |
-| `place_order` | `quote_id`, `mandate_token`, `rationale`, `confirm_unusual?: bool`, `agent_signature?` | `OrderResult` |
+| `request_quote` | `product_ids`, `amount`, `unit`, `need_by`, `preferences?: {priorities?, pack_size?}` | `QuoteSet` |
+| `place_order` | `quote_id`, `rationale`, `agent_signature?` | `OrderResult` |
 | `get_approval_status` | `approval_id` | `{status, decided_by?, decided_at?}` |
 | `get_audit_log` | `order_id?` or `quote_id?` | list of `LogEntry` |
 
 ```
-Quote:       quote_id, lines: [{product_id, name, units, sales_unit, covers, content_unit,
-             unit_price_eur, line_total_eur, available_date, cutoff_passed, stock: "confirmed"|"unconfirmed"}],
-             total_eur, total_with_tax_eur, expires_at, signature
-OrderResult: status: "confirmed" | "needs_clarification" | "pending_approval" | "rejected",
-             order_id?, approval_id?, question?, reasons: [str]
-LogEntry:    seq, time, actor, action, reason, prev_hash, hash
+SearchResult: status: "ok", understood: {product, must_have, from_mandate},
+              products: [ProductSummary], dropped: [{id, name, reason}],
+              screened_by, total_matches, truncated, hint?
+QuoteSet:     status: "ok", set_id, asked: {amount, unit, need_by},
+              options: [{rank, label, trade_off, expected: {status, reasons}, quote: Quote}],
+              not_offered: [{product_id, name, reason}]
+Quote:        quote_id, lines: [{product_id, name, units, sales_unit, covers, content_unit,
+              unit_price_eur, line_total_eur, available_date, cutoff_passed, closing_time,
+              stock: "confirmed"|"unconfirmed"}],
+              total_eur, total_with_tax_eur, expires_at, signature
+OrderResult:  status: "confirmed" | "pending_approval" | "rejected",
+              order_id?, approval_id?, reasons: [str],
+              alternatives?: [{quote_id, rank, label, summary, total_eur}]
+LogEntry:     seq, time, actor, action, reason, prev_hash, hash
 ```
 
-Every error is `{code, message, retryable}`.
+`ProductSummary` and `Product` are Contract A's shapes plus `properties`: the product's tags in plain words.
 
-`agent_signature` is a JWS (EdDSA) by the agent's own key over `{quote_id, mandate_id, confirm_unusual}`. It is required when the mandate has an `agent_key`, and ignored otherwise.
+Every error is `{code, message, retryable}`. When a parameter is missing or a must-have word is not known, `search_products` and `request_quote` answer `{status: "needs_clarification", missing, unknown, known_properties, question}`.
 
-**Authentication** (added at the user's request). Only the agent of a registered kitchen may call `/mcp`. Every HTTP request to `/mcp` carries two headers:
-- `X-Mandate: <the kitchen's signed mandate token>`. It must verify against the kitchen's registered key, be in date, and name an `agent_key`.
-- `Authorization: Bearer <agent session token>`: a JWS (EdDSA) signed by that agent key. Header `kid` = the mandate's `agent_id`. Claims: `aud: "valio-aimo-trade"`, `mandate_id` (the mandate's), `iat`, and `exp` at most 15 minutes after `iat`. Clocks may differ by 60 seconds.
+`label` is "best", "better", "good", "other" or "split". `expected` is what the mandate would decide if that option were ordered now; the decision at order time is the one that counts. `preferences.priorities` is the buyer's own order of `price`, `reliability`, `finnish`, `sustainability`.
 
-Anything else gets 401 `{code, message, retryable: false}` with `WWW-Authenticate: Bearer`. The codes are `agent_not_authenticated`, `mandate_not_accepted`, `agent_key_missing` and `agent_token_invalid`. Every refusal is logged as actor `unknown agent`, action `connect:refused`. Tools log the authenticated `agent_id` as the actor. `place_order` rejects a mandate of any other kitchen: "This agent may only order for the kitchen it is registered for." The plain HTTP routes below stay open.
+`agent_signature` is a JWS (EdDSA) by the agent's own key over `{quote_id, mandate_id}`. It is required when the mandate has an `agent_key`, and ignored otherwise.
 
-Runner 2 also serves plain HTTP for Runner 3's screens:
+One live order per request: ordering another option from the same quote set withdraws the one waiting for approval, and is refused when one is already confirmed.
+
+The server also serves plain HTTP for the screens. These need no mandate:
 - `GET /approvals`, `POST /approvals/{id}/approve`, `POST /approvals/{id}/reject`
 - `GET /log`, `GET /log/verify` → `{ok: bool, broken_at_seq?}`
-- `POST /buyers` with `{public_pem, mandate_token}` → 201 `{buyer_id, mandate_id, status: "registered"}`. A kitchen registers its public key and its signed mandate. HTTP only, never an MCP tool, so an agent cannot register a mandate. Added for buyer onboarding: see `docs/superpowers/specs/2026-11-14-buyer-onboarding-design.md`.
+- `POST /buyers` with `{public_pem, mandate_token}` → 201 `{buyer_id, mandate_id, status: "registered"}`. A kitchen registers its public key and its signed mandate. HTTP only, never an MCP tool, so an agent cannot register a mandate.
 
 ---
+
+> **History.** Everything from here down is the original three-runner plan, kept for reference. It describes the first build: an order could end as `needs_clarification`, the buyer agent dropped wrong products and ranked offers itself, and `place_order` took a `mandate_token`. Contract B above and `docs/superpowers/specs/2026-11-14-seller-agent-backend-design.md` describe the system as built.
 
 ## Runner 1: Catalog
 

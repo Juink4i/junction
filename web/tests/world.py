@@ -48,8 +48,13 @@ def world(tmp_path):
         (mandates / f"{buyer_id}.jwt").write_text(token)
     svc = Service(conn, fake_catalog, lambda: datetime.now(timezone.utc))
 
+    def quote(token: str, product_id: str, litres: float) -> dict:
+        """The first option for one product, as request_quote ranks it."""
+        options = svc.request_quote(svc.authenticate(token), [product_id], litres, "L", NEED_BY)["options"]
+        return options[0]["quote"]
+
     def order(buyer: str, product_id: str, litres: float) -> dict:
-        q = svc.request_quote([{"product_id": product_id, "amount": litres, "unit": "L"}], NEED_BY)
+        q = quote(tokens[buyer], product_id, litres)
         return {**svc.place_order(q["quote_id"], tokens[buyer], f"test {buyer}"), "quote_id": q["quote_id"]}
 
     hotel = order("hotel", "464201", 1000)        # €1,560: over the hotel's €800 line limit
@@ -75,8 +80,8 @@ def world(tmp_path):
     enroll(daycare, KID, agent_pem, "http://trade.test", buyers_dir=buyers, client=Register())
     enroll(template("cafe"), SOINTU, None, "http://trade.test", buyers_dir=buyers, client=Register())
     kid_token = (buyers / KID / "mandate.jwt").read_text()
-    q = svc.request_quote([{"product_id": "464201", "amount": 40, "unit": "L"}], NEED_BY)
-    signature = sign_order(key_path(KID, buyers), kid_token, q["quote_id"], False)
+    q = quote(kid_token, "464201", 40)
+    signature = sign_order(key_path(KID, buyers), kid_token, q["quote_id"])
     kid = {**svc.place_order(q["quote_id"], kid_token, "weekly milk", agent_signature=signature),
            "quote_id": q["quote_id"]}
     assert kid["status"] == "confirmed", kid
@@ -94,7 +99,7 @@ def world(tmp_path):
     w.hotel, w.cafe_ok, w.cafe_wait = hotel, cafe_ok, cafe_wait
     w.state_db, w.mandates, w.dist = tmp_path / "state.db", mandates, dist
     w.keys = tmp_path / "buyer_keys"
-    w.buyers, w.kid = buyers, kid
+    w.buyers, w.kid, w.quote = buyers, kid, quote
     w.trade = Trade(svc)
     yield w
     conn.close()

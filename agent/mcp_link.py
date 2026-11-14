@@ -16,11 +16,11 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any, Callable
 
+import httpx
 import httpx2
 import jwt
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
-from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import Implementation
 
 from agent.identity import session_token
@@ -90,6 +90,14 @@ class RefusalCatcher:
             self.reason = "The trade server refused this agent (401 Unauthorized)."
 
 
+class MandateRefused(RuntimeError):
+    """The trade server did not accept the mandate. Carries its reason and the onboarding link."""
+
+    def __init__(self, code: str, message: str, onboarding_url: str | None = None):
+        super().__init__(message)
+        self.code, self.message, self.onboarding_url = code, message, onboarding_url
+
+
 def _error(code: str, message: str, retryable: bool = False) -> dict[str, Any]:
     return {"error": {"code": code, "message": message, "retryable": retryable}}
 
@@ -130,25 +138,60 @@ def parse_result(result) -> Any:
 
 
 class TradeLink:
-    """`async with TradeLink(url) as link: await link.call("search_products", {...})`"""
+    """`async with TradeLink(url, mandate_token) as link: await link.call("search_products", {...})`
 
-    def __init__(self, url: str, *, timeout_s: float = 60, mandate_token: str | None = None,
+    The kitchen's mandate travels in X-Mandate on every request. With the agent's key file,
+    a short session token signed by that key goes beside it as Authorization: Bearer, which
+    the trade server requires. The AI model never sees either.
+    """
+
+    def __init__(self, url: str, mandate_token: str = "", *, timeout_s: float = 60,
                  agent_key_file: Path | None = None, on_token: Callable[[str], None] | None = None):
         self.url = url
+        self.token = mandate_token
         self.timeout_s = timeout_s
         self.credentials = (AgentCredentials(mandate_token, agent_key_file, on_token=on_token)
                             if mandate_token and agent_key_file else None)
         self._stack: AsyncExitStack | None = None
         self._client: Client | None = None
 
+    def _headers(self) -> dict[str, str]:
+        return {"X-Mandate": self.token} if self.token else {}
+
+    async def _check_mandate(self) -> None:
+        """Ask the server whether it accepts the mandate, to learn why if it does not.
+
+        The MCP client only reports that the connection failed. A server without this
+        endpoint, or one that is down, is left for the connection attempt to report.
+        """
+        base = self.url.rstrip("/").removesuffix("/mcp")
+        try:
+            async with httpx.AsyncClient(timeout=10) as http:
+                response = await http.get(f"{base}/mandate", headers=self._headers())
+        except httpx.HTTPError:
+            return
+        if response.status_code != 401:
+            return
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        if isinstance(body, dict) and body.get("code"):
+            raise MandateRefused(str(body["code"]),
+                                 str(body.get("message") or "The mandate was not accepted."),
+                                 body.get("onboarding_url"))
+
     async def __aenter__(self) -> "TradeLink":
+        await self._check_mandate()
         self._stack = AsyncExitStack()
         refusal = RefusalCatcher()
         try:
-            http = await self._stack.enter_async_context(create_mcp_http_client(auth=self.credentials))
+            http = await self._stack.enter_async_context(httpx2.AsyncClient(
+                headers=self._headers(), auth=self.credentials,
+                timeout=httpx2.Timeout(30.0, read=300.0)))
             http.event_hooks["response"].append(refusal)
-            client = Client(streamable_http_client(self.url, http_client=http), client_info=CLIENT_INFO,
-                            read_timeout_seconds=self.timeout_s)
+            client = Client(streamable_http_client(self.url, http_client=http),
+                            client_info=CLIENT_INFO, read_timeout_seconds=self.timeout_s)
             self._client = await self._stack.enter_async_context(client)
         except BaseException as exc:  # connection errors arrive wrapped in exception groups
             await self._stack.aclose()

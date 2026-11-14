@@ -53,9 +53,9 @@ def test_admin_order_detail(client, world):
 
 
 def test_admin_log_attributes_rows_to_buyers(client, world):
-    world.svc.search_products("milk", actor="buyer-agent-02")          # no ids, cafe's agent
+    world.svc.search_products(world.svc.authenticate(world.tokens["cafe"]), "milk")  # no ids, cafe's agent
     world.svc.decide_approval("apr_nope", True, "kitchen.lead@school.example")  # school's approver
-    world.svc.search_products("milk", actor="valio-buyer-agent")       # shared client name
+    world.svc.get_product("nope", actor="valio-buyer-agent")       # shared client name
 
     log = client.get("/api/admin/log").json()
     assert [r["seq"] for r in log] == sorted(r["seq"] for r in log)

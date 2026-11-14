@@ -1,97 +1,23 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Trusted Trade Agents · demo</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <style>
-    html, body { height: 100%; }
-    body { display: flex; flex-direction: column; }
-    .bar nav { display: flex; gap: 6px; }
-    .bar nav a { text-decoration: none; padding: 6px 10px; border-radius: 8px; font-size: 13.5px; font-weight: 600; color: var(--muted); }
-    .bar nav a:hover { background: var(--surface-2); color: var(--ink); }
-    .tag { font-size: 13px; color: var(--muted); }
-    .tag b { color: var(--ink); }
-    .stage { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 20px; padding: 16px 20px; }
-    .panel { min-height: 0; display: flex; flex-direction: column; }
-    .panel h2 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
-    .frame { flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--bg); box-shadow: var(--shadow); }
-    iframe { width: 100%; height: 100%; border: 0; display: block; }
-    .phone { width: 380px; height: min(760px, calc(100vh - 230px)); min-height: 520px; margin: 0 auto; border-radius: 42px;
-      padding: 12px; background: #11181d; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25); position: relative; }
-    .phone::before { content: ""; position: absolute; top: 18px; left: 50%; width: 90px; height: 22px; margin-left: -45px; border-radius: 12px; background: #000; z-index: 2; }
-    .phone .screen { width: 100%; height: 100%; border-radius: 32px; overflow: hidden; background: var(--bg); padding-top: 26px; }
-    .scan { display: flex; gap: 12px; align-items: center; margin: 14px auto 0; width: 380px; font-size: 13px; color: var(--muted); }
-    .scan #qr { background: #fff; padding: 6px; border-radius: 8px; flex: none; line-height: 0; }
-    .scan #qr:empty { display: none; }
-    .scan code { color: var(--ink); word-break: break-all; }
-    @media (max-width: 960px) {
-      .stage { grid-template-columns: 1fr; }
-      .chatpanel { height: 70vh; }
-      .phone, .scan { width: 100%; max-width: 380px; }
-    }
-  </style>
-</head>
-<body>
-  <header class="bar">
-    <div class="grow">
-      <h1>Trusted Trade Agents</h1>
-      <p class="tag">An open front door for Valio Aimo. <b>The AI suggests. Plain code decides.</b></p>
-    </div>
-    <nav><a href="/chat" target="_blank">Chat</a><a href="/approvals" target="_blank">Approvals</a><a href="/log" target="_blank">Log</a></nav>
-  </header>
-  <main class="stage">
-    <section class="panel chatpanel">
-      <h2>Buyer agent ↔ trade server (MCP)</h2>
-      <div class="frame"><iframe src="/chat" title="Agent conversation"></iframe></div>
-    </section>
-    <section class="panel">
-      <h2 id="phonelabel">Procurement manager's phone</h2>
-      <div class="phone"><div class="screen"><iframe id="phoneframe" src="/approvals" title="Phone"></iframe></div></div>
-      <div class="scan">
-        <div id="qr"></div>
-        <div>Approve on your own phone (same Wi-Fi):<br><code id="phoneurl"></code></div>
-      </div>
-    </section>
-  </main>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <script>
-    (async () => {
-      let url = location.origin + "/approvals";
-      try {
-        const info = await (await fetch("/api/info")).json();
-        if (info.phone_url) url = info.phone_url;
-      } catch { /* keep default */ }
-      document.getElementById("phoneurl").textContent = url;
-      if (window.QRCode) new QRCode(document.getElementById("qr"), { text: url, width: 84, height: 84 });
-    })();
-
-    // The phone frame follows the demo: the onboarding page while a kitchen signs up,
-    // the approvals page otherwise.
-    const frame = document.getElementById("phoneframe");
-    const label = document.getElementById("phonelabel");
-    let backTimer = null;
-    function showOnPhone(path, title) {
-      clearTimeout(backTimer);
-      if (frame.getAttribute("src") !== path) frame.setAttribute("src", path);
-      label.textContent = title;
-    }
-    const showApprovals = () => showOnPhone("/approvals", "Procurement manager's phone");
-    const events = new EventSource("/api/events/stream");
-    events.onmessage = (m) => {
-      let e;
-      try { e = JSON.parse(m.data); } catch { return; }
-      if (e.kind === "scene") {
-        if (e.onboard) showOnPhone("/onboarding?preset=" + encodeURIComponent(e.onboard), "Kitchen manager's phone");
-        else showApprovals();
-      } else if (e.kind === "onboarded") {
-        clearTimeout(backTimer);
-        backTimer = setTimeout(showApprovals, 3000);
-      } else if (e.kind === "clear") {
-        showApprovals();
-      }
-    };
-  </script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b4f8a" />
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+    <title>Trusted Trade Agents · demo</title>
+    <script>
+      if (matchMedia("(prefers-color-scheme: dark)").matches) document.documentElement.classList.add("dark")
+    </script>
+    <script type="module" crossorigin src="/static/assets/stage-Ao5GRHYH.js"></script>
+    <link rel="modulepreload" crossorigin href="/static/assets/mount-CdPPVDj4.js">
+    <link rel="modulepreload" crossorigin href="/static/assets/arrow-down-DsOEctB3.js">
+    <link rel="modulepreload" crossorigin href="/static/assets/events-BSfryJjM.js">
+    <link rel="modulepreload" crossorigin href="/static/assets/chat-feed-qk1R_tnW.js">
+    <link rel="modulepreload" crossorigin href="/static/assets/api-CI5Do57N.js">
+    <link rel="stylesheet" crossorigin href="/static/assets/mount-BjGTPg2X.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
 </html>
