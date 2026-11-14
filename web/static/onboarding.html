@@ -28,11 +28,7 @@
     .small { min-height: 32px; padding: 0 10px; font-size: 13px; }
     .usual { border-top: 1px solid var(--line); padding: 10px 0; }
     .usual .inline > input[type=number], .usual .inline > select[data-f=unit] { flex: 0 0 56px; padding: 0 6px; }
-    .sentences { list-style: none; margin: 0; padding: 0; }
-    .sentences li { display: flex; gap: 8px; align-items: flex-start; padding: 7px 0;
-      border-top: 1px solid var(--line); font-size: 14px; }
-    .sentences li:first-child { border-top: 0; }
-    .sentences .pill { flex: none; margin-top: 1px; }
+    .signbar .banner { max-width: 528px; margin: 0 auto 8px; }
     .signbar { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 16px; border-top: 1px solid var(--line);
       background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(8px); }
     .signbar .btn { display: flex; width: 100%; max-width: 528px; margin: 0 auto; }
@@ -49,14 +45,12 @@
   <main class="wrap stack">
     <div id="types" class="chips"></div>
     <form id="form" class="stack" onsubmit="return false"></form>
-    <section id="review" class="card">
-      <h2>What you are signing</h2>
-      <div id="problems" class="banner bad hidden"></div>
-      <ul id="sentences" class="sentences"></ul>
-    </section>
     <section id="done" class="card hidden"></section>
   </main>
-  <div id="signbar" class="signbar"><button id="sign" class="btn primary" disabled>Sign and register</button></div>
+  <div id="signbar" class="signbar">
+    <div id="problems" class="banner bad hidden"></div>
+    <button id="sign" class="btn primary" disabled>Sign and register</button>
+  </div>
 
   <script src="/static/common.js"></script>
   <script>
@@ -73,9 +67,6 @@
 
     const picks = (items, chosen) => items.map((i) =>
       `<option value="${esc(i.code)}"${i.code === chosen ? " selected" : ""}>${esc(i.name)}</option>`).join("");
-
-    const sentenceList = (sentences) => sentences.map((s) =>
-      `<li>${pill(s.kind)}<span>${esc(s.text)}</span></li>`).join("");
 
     function renderForm() {
       const a = answers;
@@ -178,7 +169,6 @@
       catch (err) { body = { problems: [err.message], sentences: [] }; }
       $("problems").classList.toggle("hidden", body.problems.length === 0);
       $("problems").innerHTML = body.problems.map((p) => `<div>${esc(p)}</div>`).join("");
-      $("sentences").innerHTML = sentenceList(body.sentences);
       $("sign").disabled = body.problems.length > 0;
     }
 
@@ -191,12 +181,11 @@
       button.innerHTML = '<span class="spinner"></span> Signing';
       try {
         const out = await getJSON("/api/onboarding", post(answers));
-        for (const id of ["types", "form", "review", "signbar"]) $(id).classList.add("hidden");
+        for (const id of ["types", "form", "signbar"]) $(id).classList.add("hidden");
         $("done").classList.remove("hidden");
         $("done").innerHTML = `<h2>Signed and registered</h2>
-          <p><strong>${esc(out.name)}</strong> is now a buyer at Valio Aimo. Its agent can order straight away, inside these rules.</p>
-          <p class="muted">Buyer id <code class="mono">${esc(out.buyer_id)}</code></p>
-          <ul class="sentences">${sentenceList(out.sentences)}</ul>`;
+          <p><strong>${esc(out.name)}</strong> is now a buyer at Valio Aimo. Its agent can order straight away, inside the rules it signed.</p>
+          <p class="muted">Buyer id <code class="mono">${esc(out.buyer_id)}</code></p>`;
         window.scrollTo({ top: 0 });
       } catch (err) {
         $("problems").classList.remove("hidden");
