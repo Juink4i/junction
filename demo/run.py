@@ -26,7 +26,8 @@ if str(ROOT) not in sys.path:
 
 import httpx  # noqa: E402
 
-from agent.config import DEFAULT_MODEL, Settings, load_gemini_key, load_mandate, secret_values  # noqa: E402
+from agent.config import (DEFAULT_MODEL, Settings, load_gemini_key, load_mandate,  # noqa: E402
+                          quiet_logs, secret_values)
 from agent.events import EventSink  # noqa: E402
 from agent.mcp_link import TradeServerUnreachable  # noqa: E402
 from agent.runner import make_ask, run_buyer  # noqa: E402
@@ -123,6 +124,7 @@ def main(argv=None) -> int:
     import os
 
     args = parse_args(argv)
+    quiet_logs()
     cfg = DemoConfig(trade_http=args.server.rstrip("/"), web_url=args.web.rstrip("/"),
                      scripted=args.scripted, pause_s=args.pause)
     started = []

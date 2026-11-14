@@ -75,6 +75,14 @@ def load_gemini_key(env_file: Path = ROOT / ".env") -> bool:
     return bool(key)
 
 
+def quiet_logs() -> None:
+    """Keep the terminal readable: no per-request INFO lines from HTTP or MCP libraries."""
+    import logging
+
+    for name in ("httpx", "httpx2", "mcp", "uvicorn", "google_adk", "google_genai"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 def secret_values() -> list[str]:
     """Values that must never be shown: used to scrub everything the agent prints or sends."""
     names = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "VALIO_API_KEY", "MANDATE_TOKEN")

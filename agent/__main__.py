@@ -11,7 +11,8 @@ import asyncio
 import os
 import sys
 
-from agent.config import BUYERS, DEFAULT_MODEL, Settings, load_gemini_key, load_mandate, secret_values
+from agent.config import (BUYERS, DEFAULT_MODEL, Settings, load_gemini_key, load_mandate, quiet_logs,
+                          secret_values)
 from agent.events import EventSink
 from agent.mcp_link import TradeServerUnreachable
 from agent.runner import run_buyer
@@ -36,6 +37,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    quiet_logs()
     if not load_gemini_key():
         print("No Gemini key. Put GEMINI_API_KEY=... in .env at the repo root.", file=sys.stderr)
         return 2
