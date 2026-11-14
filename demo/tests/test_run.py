@@ -53,6 +53,8 @@ async def test_all_six_scenes(fake, tmp_path):
     assert all("Aurinko" not in buyer for buyer, _ in phone.decisions)
     started = next(e for e in sink.history if e["kind"] == "run_start")
     assert any("lowest total price" in line for line in started["preferences"])
+    first_order = next(e for e in sink.history if e["kind"] == "tool_call" and e["tool"] == "place_order")
+    assert first_order["args"]["agent_signature"] == "[signed by the agent's key]"
 
     # Scene c: the server said "insufficient_stock", and the agent split the order into the
     # 700 L that was left plus a lactose-free substitute.

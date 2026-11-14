@@ -95,7 +95,9 @@ One ADK agent does two jobs:
   it to choose between products that already fit. It holds no rule.
 
 What the code does around it (`agent/tools.py`):
-- `place_order` attaches the buyer's signed mandate. The model never sees or chooses it.
+- `place_order` attaches the buyer's signed mandate, and signs the order with the agent's own key
+  when the mandate names one. The model never sees or chooses either. A copy of the mandate alone
+  cannot place an order for a kitchen that signed up through onboarding.
 - `get_approval_status` keeps checking until a person decides, instead of the model polling.
 - Everything the agent prints or streams is scrubbed of key values. The agent process only loads
   the Gemini key, never the Valio Aimo key.

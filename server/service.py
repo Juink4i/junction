@@ -261,8 +261,8 @@ class Service:
 
     @locked
     def place_order(self, quote_id: str, mandate_token: str, rationale: str,
-                    confirm_unusual: bool = False) -> dict:
-        return self._place_order(quote_id, mandate_token, rationale, confirm_unusual)
+                    confirm_unusual: bool = False, agent_signature: str | None = None) -> dict:
+        return self._place_order(quote_id, mandate_token, rationale, confirm_unusual, agent_signature)
 
     def _refuse(self, quote_id: str, reason: str) -> dict:
         """A refusal that is not tied to an order, so it cannot use up someone's quote."""
@@ -284,7 +284,7 @@ class Service:
         return self.conn.execute(f"SELECT * FROM orders WHERE {column} = ?", (value,)).fetchone()
 
     def _place_order(self, quote_id: str, mandate_token: str, rationale: str,
-                     confirm_unusual: bool) -> dict:
+                     confirm_unusual: bool, agent_signature: str | None = None) -> dict:
         now = self.now()
         try:
             buyer_id, mandate = verify_mandate(mandate_token, self.conn, now.date())
@@ -293,10 +293,19 @@ class Service:
                       "valid mandate.")
             return self._refuse(quote_id, f"The mandate was not accepted. {e}")
         actor = str(mandate["agent_id"])
+        signed_by_agent = "agent_key" in mandate
+        if signed_by_agent:
+            problem = signing.order_signature_problem(agent_signature, mandate, quote_id, confirm_unusual)
+            if problem:
+                self._log("unknown agent", "place_order",
+                          f"Asked to order quote {quote_id} for {mandate['buyer']} with a copy of its "
+                          "mandate, but without a valid signature from its agent.")
+                return self._refuse(quote_id, problem)
         quote_row = self.conn.execute("SELECT * FROM quotes WHERE quote_id = ?", (quote_id,)).fetchone()
         self._log(actor, "place_order",
                   f"Asked to order quote {quote_id} for {mandate['buyer']}"
                   f"{' and confirmed the unusual amount' if confirm_unusual else ''}. "
+                  f"{'The order is signed by the agent key named in the mandate. ' if signed_by_agent else ''}"
                   f"The agent's reason: \"{rationale[:500]}\"",
                   quote_id=quote_id if quote_row else None)
 

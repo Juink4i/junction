@@ -96,14 +96,18 @@ def request_quote(ctx: Context, lines: list[QuoteLineRequest], need_by: date) ->
 
 @mcp.tool()
 def place_order(quote_id: str, mandate_token: str, rationale: str,
-                confirm_unusual: bool = False) -> dict[str, Any]:
+                confirm_unusual: bool = False, agent_signature: str | None = None) -> dict[str, Any]:
     """Place the order for a quote, using the buyer's signed mandate.
 
     Returns one status: confirmed, needs_clarification, pending_approval or rejected,
     always with plain-language reasons. Calling again with the same quote_id returns the
     same order.
+
+    agent_signature is the agent's own signature over this order (quote_id, mandate_id,
+    confirm_unusual). It is required when the mandate names an agent key, so a copy of the
+    mandate alone cannot place orders.
     """
-    return service().place_order(quote_id, mandate_token, rationale, confirm_unusual)
+    return service().place_order(quote_id, mandate_token, rationale, confirm_unusual, agent_signature)
 
 
 @mcp.tool()

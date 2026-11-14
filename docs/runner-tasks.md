@@ -55,7 +55,7 @@ Server name `valio-aimo-trade`, served over HTTP at `http://localhost:8000/mcp`.
 | `search_products` | `text`, `category?`, `must_have_tags?` | list of `ProductSummary` |
 | `get_product` | `product_id` | `Product` |
 | `request_quote` | `lines: [{product_id, amount, unit}]`, `need_by: date` | `Quote` |
-| `place_order` | `quote_id`, `mandate_token`, `rationale`, `confirm_unusual?: bool` | `OrderResult` |
+| `place_order` | `quote_id`, `mandate_token`, `rationale`, `confirm_unusual?: bool`, `agent_signature?` | `OrderResult` |
 | `get_approval_status` | `approval_id` | `{status, decided_by?, decided_at?}` |
 | `get_audit_log` | `order_id?` or `quote_id?` | list of `LogEntry` |
 
@@ -69,6 +69,8 @@ LogEntry:    seq, time, actor, action, reason, prev_hash, hash
 ```
 
 Every error is `{code, message, retryable}`.
+
+`agent_signature` is a JWS (EdDSA) by the agent's own key over `{quote_id, mandate_id, confirm_unusual}`. It is required when the mandate has an `agent_key`, and ignored otherwise.
 
 Runner 2 also serves plain HTTP for Runner 3's screens:
 - `GET /approvals`, `POST /approvals/{id}/approve`, `POST /approvals/{id}/reject`

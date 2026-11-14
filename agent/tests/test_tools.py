@@ -16,8 +16,8 @@ MONDAY = (date.today() + timedelta(days=3)).isoformat()
 
 
 def _box(link, answers=None, **kw):
-    settings = Settings(server_url="unused", web_url=None, mandate_token="demo-hotel",
-                        poll_every_s=0.1, **kw)
+    kw.setdefault("mandate_token", "demo-hotel")
+    settings = Settings(server_url="unused", web_url=None, poll_every_s=0.1, **kw)
     sink = EventSink(None, console=False)
 
     async def ask(question):
@@ -102,3 +102,42 @@ async def test_search_reports_count_and_products(fake):
         box, _ = _box(link)
         out = await _tools(box)["search_products"]("milk", "10400", ["FREE_FROM_LACTOSE"])
     assert out["count"] == len(out["products"]) >= 4
+
+
+class RecordingLink:
+    def __init__(self):
+        self.calls = []
+
+    async def call(self, tool, args):
+        self.calls.append((tool, args))
+        return {"status": "confirmed", "order_id": "ord_1", "reasons": ["ok"]}
+
+
+async def test_place_order_is_signed_by_the_agents_key_and_the_signature_is_hidden(tmp_path):
+    import jwt
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from agent.identity import ensure_agent_key, key_path
+
+    public_pem = ensure_agent_key("k-0000", tmp_path)
+    token = jwt.encode({"mandate_id": "mnd_k-0000_001", "agent_id": "agent-k-0000"},
+                       Ed25519PrivateKey.generate(), algorithm="EdDSA", headers={"kid": "k-0000"})
+    link = RecordingLink()
+    box, sink = _box(link, mandate_token=token, agent_key_file=key_path("k-0000", tmp_path))
+    await _tools(box)["place_order"]("q_1", "Cheapest on-time option.")
+
+    sent = link.calls[0][1]
+    payload = jwt.decode(sent["agent_signature"], serialization.load_pem_public_key(public_pem.encode()),
+                         algorithms=["EdDSA"])
+    assert payload == {"quote_id": "q_1", "mandate_id": "mnd_k-0000_001", "confirm_unusual": False}
+    shown = next(e for e in sink.history if e["kind"] == "tool_call")["args"]
+    assert shown["agent_signature"] == "[signed by the agent's key]"
+    assert sent["agent_signature"] not in str(sink.history)
+
+
+async def test_place_order_sends_no_signature_when_the_agent_has_no_key():
+    link = RecordingLink()
+    box, _ = _box(link)
+    await _tools(box)["place_order"]("q_1", "Cheapest on-time option.")
+    assert "agent_signature" not in link.calls[0][1]

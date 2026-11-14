@@ -43,6 +43,7 @@ class Settings:
     replies: list[str] = field(default_factory=list)
     today: date = field(default_factory=date.today)
     profile: dict | None = None  # preferences from onboarding; never rules
+    agent_key_file: Path | None = None  # the agent's private key, when the mandate names its public half
 
     @property
     def buyer_name(self) -> str:

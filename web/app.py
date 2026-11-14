@@ -26,6 +26,7 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from agent.identity import ensure_agent_key
 from onboarding.build import build, new_buyer_id, problems
 from onboarding.enroll import BUYERS_DIR, EnrollError, enroll
 from onboarding.options import options as onboarding_options
@@ -171,7 +172,8 @@ def create_app(trade_http: str | None = None, buyers_dir: Path | None = None) ->
         if answers is None:
             return bad_answers("Send the answers as a JSON object.")
         found = problems(answers)
-        sentences = [] if found else build(answers, "preview", date.today()).sentences
+        sentences = [] if found else build(answers, "preview", date.today(),
+                                           agent_public_pem="preview").sentences
         return JSONResponse({"problems": found, "sentences": sentences})
 
     async def onboarding_submit(request: Request) -> JSONResponse:
@@ -183,7 +185,9 @@ def create_app(trade_http: str | None = None, buyers_dir: Path | None = None) ->
             return bad_answers(" ".join(found))
         buyer_id = new_buyer_id(answers["kitchen"]["name"])
         try:
-            built = await run_in_threadpool(enroll, answers, buyer_id, None, trade, buyers_dir=buyers)
+            agent_pem = await run_in_threadpool(ensure_agent_key, buyer_id, buyers)
+            built = await run_in_threadpool(enroll, answers, buyer_id, agent_pem, trade,
+                                            buyers_dir=buyers)
         except EnrollError as exc:
             status = {"server_unreachable": 502, "buyer_exists": 409}.get(exc.code, 400)
             return JSONResponse({"code": exc.code, "message": exc.message,

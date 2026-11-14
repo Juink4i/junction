@@ -103,6 +103,8 @@ Later this could become a W3C Verifiable Credential, or follow Google's AP2 form
 
 **Where a mandate comes from.** A kitchen signs up on the onboarding page (`/onboarding`). Each answer becomes a rule in the mandate or a preference in a profile that only its own agent reads. The page adds two optional parts to the mandate: `budget` (for example `{"period": "week", "max_eur": 150}`) and `usual_orders` (what the kitchen normally buys, the baseline for the "looks odd" check). The kitchen signs the mandate with a key made on its own side and registers the public half with `POST /buyers`.
 
+**Two keys.** The kitchen's key signs the mandate. The agent has its own key; its public half is written into the mandate as `agent_key`, and the agent signs every order with the private half. The server follows the chain: kitchen key → mandate → agent key → this order. A copied mandate is useless without the agent's key, and a stolen agent key is still held to the mandate's rules.
+
 ### Who decides
 
 | Situation | Outcome |

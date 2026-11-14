@@ -89,3 +89,20 @@ def test_bad_answers_never_reach_the_server(tmp_path):
     with pytest.raises(ValueError):
         enroll(bad, "aurinko-3f2a", None, "http://127.0.0.1:9", today=TODAY, buyers_dir=tmp_path)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_kitchen_enrolled_with_an_agent_key_needs_signed_orders(trade, svc, tmp_path):
+    from agent.identity import ensure_agent_key, key_path, sign_order
+
+    agent_pem = ensure_agent_key("aurinko-3f2a", tmp_path)
+    enroll(answers(), "aurinko-3f2a", agent_pem, TRADE, today=TODAY, buyers_dir=tmp_path, client=trade)
+    folder = tmp_path / "aurinko-3f2a"
+    assert sorted(p.name for p in folder.iterdir()) == [
+        "agent_key.pem", "buyer_key.pem", "mandate.jwt", "profile.json"]
+    token = (folder / "mandate.jwt").read_text()
+    quote_id = svc.request_quote([{"product_id": "464201", "amount": 40, "unit": "L"}],
+                                 "2026-11-16")["quote_id"]
+    assert svc.place_order(quote_id, token, "Weekly milk")["status"] == "rejected"
+    signature = sign_order(key_path("aurinko-3f2a", tmp_path), token, quote_id, False)
+    assert svc.place_order(quote_id, token, "Weekly milk",
+                           agent_signature=signature)["status"] == "confirmed"

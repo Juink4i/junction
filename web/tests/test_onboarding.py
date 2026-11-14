@@ -82,3 +82,14 @@ def test_the_stage_phone_frame_can_follow_the_scene(client):
     page = client.get("/").text
     assert 'id="phoneframe"' in page and 'id="phonelabel"' in page
     assert "/onboarding?preset=" in page
+
+
+def test_sign_up_gives_the_agent_its_own_key(client, tmp_path):
+    out = client.post("/api/onboarding", json=template("daycare")).json()
+    folder = tmp_path / out["buyer_id"]
+    assert (folder / "agent_key.pem").exists()
+    mandate = jwt.decode((folder / "mandate.jwt").read_text(), options={"verify_signature": False})
+    assert "BEGIN PUBLIC KEY" in mandate["agent_key"]
+    assert any("signed by this kitchen's agent" in s["text"] for s in out["sentences"])
+    preview = client.post("/api/onboarding/preview", json=template("daycare")).json()
+    assert any("signed by this kitchen's agent" in s["text"] for s in preview["sentences"])

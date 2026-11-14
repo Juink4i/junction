@@ -373,8 +373,11 @@ def _decide(quote: dict[str, Any], m: dict[str, Any], confirm_unusual: bool) -> 
 
 @mcp.tool()
 def place_order(quote_id: str, mandate_token: str, rationale: str,
-                confirm_unusual: bool = False) -> dict[str, Any]:
-    """Order a quote. Plain code checks the quote and the buyer's mandate and decides the result."""
+                confirm_unusual: bool = False, agent_signature: str | None = None) -> dict[str, Any]:
+    """Order a quote. Plain code checks the quote and the buyer's mandate and decides the result.
+
+    The fake accepts agent_signature and ignores it. The real server checks it.
+    """
     m = _mandate_for(mandate_token)
     if m is None:
         log("policy", "place_order rejected", "The mandate is missing or its signature is not valid.",

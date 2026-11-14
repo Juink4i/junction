@@ -31,6 +31,7 @@ import httpx  # noqa: E402
 from agent.config import (DEFAULT_MODEL, Settings, load_gemini_key, load_mandate,  # noqa: E402
                           quiet_logs, secret_values)
 from agent.events import EventSink  # noqa: E402
+from agent.identity import ensure_agent_key, key_path  # noqa: E402
 from agent.mcp_link import TradeServerUnreachable  # noqa: E402
 from agent.runner import check_model, make_ask, run_buyer  # noqa: E402
 from agent.scripted import PlannedLlm, shopping_plan  # noqa: E402
@@ -115,7 +116,8 @@ async def sign_up(scene: Scene, cfg: DemoConfig, sink: EventSink) -> str:
                                   "kitchen's answers itself.")
     answers = template(scene.onboard)
     buyer = new_buyer_id(answers["kitchen"]["name"])
-    built = await asyncio.to_thread(enroll, answers, buyer, None, cfg.trade_http,
+    agent_pem = await asyncio.to_thread(ensure_agent_key, buyer, cfg.buyers_dir)
+    built = await asyncio.to_thread(enroll, answers, buyer, agent_pem, cfg.trade_http,
                                     buyers_dir=cfg.buyers_dir)
     sink.buyer = buyer
     sink.publish("onboarded", buyer_name=built.profile["name"], sentences=built.sentences)
@@ -149,11 +151,14 @@ async def play_scene(scene: Scene, cfg: DemoConfig, sink: EventSink) -> str:
     else:
         token, _ = load_mandate(scene.buyer)
 
+    key_file = key_path(buyer, cfg.buyers_dir)
+
     async def attempt(scripted: bool):
         model = PlannedLlm(shopping_plan(scene.plan, gullible=scene.gullible)) if scripted else cfg.model
         settings = Settings(buyer=buyer, server_url=cfg.mcp_url, web_url=None, model=model,
                             mandate_token=token, approval_wait_s=scene.wait_s * cfg.wait_scale,
-                            gullible=scene.gullible, replies=list(scene.replies), profile=profile)
+                            gullible=scene.gullible, replies=list(scene.replies), profile=profile,
+                            agent_key_file=key_file if key_file.exists() else None)
         return await run_buyer(scene.request, settings, sink, make_ask(scene.replies, interactive=False))
 
     with scene_overrides(scene.overrides, cfg.overrides_file):
