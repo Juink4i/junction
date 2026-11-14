@@ -2,6 +2,7 @@ import { ArrowRight, BadgeCheck, Building2 } from 'lucide-react'
 import { BrowserRouter, Link, Navigate, Outlet, Route, Routes, useParams } from 'react-router'
 import { ClientShell } from '@/client/shell'
 import ClientChat from '@/client/chat'
+import ClientDeliveries from '@/client/deliveries'
 import ClientMandate from '@/client/mandate'
 import ClientOverview from '@/client/overview'
 import Onboarding from '@/client/onboarding'
@@ -73,7 +74,7 @@ function ClientLayout() {
 function ClientOrder() {
   const { orderId = '' } = useParams()
   const { buyerId } = useAccount()
-  return <OrderDetail apiPath={buyerId ? accountPath(buyerId, `/orders/${orderId}`) : null} backTo="/client" backLabel="Overview" />
+  return <OrderDetail apiPath={buyerId ? accountPath(buyerId, `/orders/${orderId}`) : null} backTo="/client/deliveries" backLabel="Deliveries" buyerView />
 }
 
 function OpsLayout() {
@@ -98,6 +99,7 @@ export default function App() {
           <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/client" element={<ClientLayout />}>
             <Route index element={<ClientOverview />} />
+            <Route path="deliveries" element={<ClientDeliveries />} />
             <Route path="chat" element={<ClientChat />} />
             <Route path="mandate" element={<ClientMandate />} />
             <Route path="orders/:orderId" element={<ClientOrder />} />

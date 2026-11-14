@@ -295,6 +295,56 @@ export function orderSteps(order: Order, today: Date = new Date()): Step[] {
 }
 
 // ---------------------------------------------------------------------------
+// The buyer's view of a delivery: four stages. Valio Aimo shares no tracking yet, so
+// "Out for delivery" and "Delivered" are shown in the diagram but never marked reached.
+
+export function deliverySteps(order: Order): Step[] {
+  const { status, approval } = order
+  const confirmed = status === 'confirmed'
+  const rejected = status === 'rejected'
+  const confirmingDetail = confirmed
+    ? approval?.decided_by
+      ? `Approved by ${approval.decided_by}.`
+      : 'Within your rules.'
+    : rejected
+      ? (order.reasons.at(-1) ?? 'Rejected.')
+      : status === 'needs_clarification'
+        ? 'Waiting for you to confirm the amount.'
+        : `Waiting for approval${approval?.approvers?.[0] ? ` from ${approval.approvers[0]}` : ''}.`
+  return [
+    {
+      key: 'confirming',
+      title: 'Confirming order',
+      who: 'code',
+      state: confirmed ? 'done' : rejected ? 'stopped' : 'active',
+      detail: confirmingDetail,
+      time: confirmed ? (approval?.decided_at ?? order.created_at) : null,
+    },
+    {
+      key: 'preparing',
+      title: 'Preparing order',
+      who: 'valio',
+      state: confirmed ? 'active' : 'todo',
+      detail: confirmed ? 'Valio Aimo is preparing it.' : rejected ? 'Not sent.' : 'Once the order is confirmed.',
+    },
+    {
+      key: 'out',
+      title: 'Out for delivery',
+      who: 'valio',
+      state: 'todo',
+      detail: confirmed && order.delivery_date ? `Planned for ${order.delivery_date}` : '—',
+    },
+    {
+      key: 'delivered',
+      title: 'Delivered',
+      who: 'valio',
+      state: 'todo',
+      detail: confirmed && order.delivery_date ? `Expected ${order.delivery_date}` : '—',
+    },
+  ]
+}
+
+// ---------------------------------------------------------------------------
 // Where an order is in its life, for the operations dashboard. "Shipping" and
 // "completed" follow Valio Aimo's promised delivery date: there is no live tracking.
 

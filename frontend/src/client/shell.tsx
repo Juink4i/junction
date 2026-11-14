@@ -1,4 +1,4 @@
-import { BadgeCheck, Building2, LayoutDashboard, MessagesSquare, ShieldCheck } from 'lucide-react'
+import { BadgeCheck, Building2, LayoutDashboard, MessagesSquare, ShieldCheck, Truck } from 'lucide-react'
 import { useLayoutEffect, type ReactNode } from 'react'
 import { Link, NavLink } from 'react-router'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -8,6 +8,7 @@ import { usePendingCount } from './use-pending'
 
 const TABS = [
   { to: '/client', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/client/deliveries', label: 'Deliveries', icon: Truck, end: false },
   { to: '/client/chat', label: 'Chat', icon: MessagesSquare, end: false },
   { to: '/client/mandate', label: 'Mandate', icon: ShieldCheck, end: false },
 ]
@@ -88,7 +89,7 @@ export function ClientShell({ children }: { children: ReactNode }) {
         )}
       </main>
 
-      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t bg-white md:hidden" aria-label="Main">
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t bg-white md:hidden" aria-label="Main">
         {TABS.map((t) => (
           <NavLink
             key={t.to}

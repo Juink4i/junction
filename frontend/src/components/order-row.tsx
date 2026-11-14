@@ -2,13 +2,13 @@ import { ChevronRight } from 'lucide-react'
 import { Link } from 'react-router'
 import { StatusBadge } from '@/components/status'
 import { dateTime, eur, shortDate, shortId, unitsBothWays } from '@/lib/format'
-import { orderSteps, statusLabel } from '@/lib/pipeline'
+import { deliverySteps, orderSteps, statusLabel, type Step } from '@/lib/pipeline'
 import type { Order } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 /** The dots-and-line delivery indicator, small, for a list row. */
-export function MiniDots({ order }: { order: Order }) {
-  const steps = orderSteps(order)
+export function MiniDots({ order, delivery }: { order: Order; delivery?: boolean }) {
+  const steps: Step[] = delivery ? deliverySteps(order) : orderSteps(order)
   return (
     <div className="flex items-center" aria-label={`Progress: ${steps.map((s) => `${s.title} ${s.state}`).join(', ')}`}>
       {steps.map((s, i) => (
@@ -44,7 +44,7 @@ export function MiniDots({ order }: { order: Order }) {
 }
 
 /** One order as a clickable card: id, outcome, lines in both units, total, delivery dots. */
-export function OrderRow({ order: o, to, buyerName }: { order: Order; to: string; buyerName?: string }) {
+export function OrderRow({ order: o, to, buyerName, delivery }: { order: Order; to: string; buyerName?: string; delivery?: boolean }) {
   return (
     <Link to={to} className="block rounded-lg border bg-card p-4 transition-colors hover:border-primary/40 sm:p-5">
       <div className="flex flex-wrap items-center gap-2">
@@ -65,7 +65,7 @@ export function OrderRow({ order: o, to, buyerName }: { order: Order; to: string
         ))}
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-3 border-t pt-3 text-xs text-muted-foreground">
-        <MiniDots order={o} />
+        <MiniDots order={o} delivery={delivery} />
         <span>{o.status === 'confirmed' ? `Arrives ${shortDate(o.delivery_date)}` : statusLabel(o.status)}</span>
         <ChevronRight className="ml-auto size-4" aria-hidden />
       </div>

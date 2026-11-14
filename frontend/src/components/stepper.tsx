@@ -1,6 +1,9 @@
 import {
   Bot,
   Check,
+  ClipboardCheck,
+  House,
+  PackageOpen,
   Code2,
   FileSignature,
   ListChecks,
@@ -27,6 +30,10 @@ const ICONS: Record<string, LucideIcon> = {
   approval: UserCheck,
   confirmed: PackageCheck,
   delivery: Truck,
+  confirming: ClipboardCheck,
+  preparing: PackageOpen,
+  out: Truck,
+  delivered: House,
 }
 
 const WHO: Record<Step['who'], { label: string; icon: LucideIcon }> = {
@@ -107,7 +114,7 @@ export function Stepper({ steps, detailFor, showWho }: { steps: Step[]; detailFo
           <div className="mt-2 w-full px-0.5 sm:mt-3 sm:px-1">
             <div
               className={cn(
-                'truncate text-[11px] leading-tight font-semibold sm:text-sm',
+                'text-[11px] leading-tight font-semibold break-words sm:text-sm',
                 s.state === 'todo' ? 'text-muted-foreground' : 'text-emphasis',
               )}
             >

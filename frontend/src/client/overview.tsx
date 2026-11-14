@@ -135,7 +135,7 @@ export default function ClientOverview() {
         )}
         <div className="space-y-3">
           {shown.map((o) => (
-            <OrderRow key={o.order_id} order={o} to={`/client/orders/${o.order_id}`} />
+            <OrderRow key={o.order_id} order={o} to={`/client/orders/${o.order_id}`} delivery />
           ))}
         </div>
       </Section>

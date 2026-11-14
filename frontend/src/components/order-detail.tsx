@@ -9,14 +9,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePoll } from '@/lib/api'
 import { eur, num, pct, shortDate, shortId, unitsBothWays } from '@/lib/format'
-import { orderSteps, type Step } from '@/lib/pipeline'
+import { deliverySteps, orderSteps, type Step } from '@/lib/pipeline'
 import type { Order } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-function heading(o: Order): { banner: string; sub: string; title: string; tone: 'go' | 'wait' | 'ask' | 'stop'; icon: typeof CheckCircle2 } {
+function heading(o: Order, buyerView?: boolean): { banner: string; sub: string; title: string; tone: 'go' | 'wait' | 'ask' | 'stop'; icon: typeof CheckCircle2 } {
   switch (o.status) {
     case 'confirmed':
-      return { banner: 'Order confirmed', sub: 'Within the rules, or approved by a person. Sent to Valio Aimo.', title: 'Delivery scheduled', tone: 'go', icon: CheckCircle2 }
+      return { banner: 'Order confirmed', sub: 'Within the rules, or approved by a person. Sent to Valio Aimo.', title: buyerView ? 'Preparing your order' : 'Delivery scheduled', tone: 'go', icon: CheckCircle2 }
     case 'pending_approval':
       return { banner: 'Waiting for approval', sub: 'The server held this order for a person.', title: 'Not sent yet', tone: 'wait', icon: Hourglass }
     case 'needs_clarification':
@@ -37,9 +37,10 @@ const TONE = {
  * One order's delivery progress. `apiPath` is the account-scoped URL in the client view
  * or the admin URL in the operations view; `withTrail` adds the hash-chained log rows.
  */
-export function OrderDetail({ apiPath, backTo, backLabel, withTrail }: { apiPath: string | null; backTo: string; backLabel: string; withTrail?: boolean }) {
+export function OrderDetail({ apiPath, backTo, backLabel, withTrail, buyerView }: { apiPath: string | null; backTo: string; backLabel: string; withTrail?: boolean; buyerView?: boolean }) {
   const { data: o, error, loading, reload } = usePoll<Order & { buyer_name?: string }>(apiPath, 4000)
-  const steps = useMemo(() => (o ? orderSteps(o) : []), [o])
+  // The buyer sees the four delivery stages; Valio Aimo sees the decision steps.
+  const steps = useMemo(() => (o ? (buyerView ? deliverySteps(o) : orderSteps(o)) : []), [o, buyerView])
   const BackLink = () => (
     <Link to={backTo} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
       <ArrowLeft className="size-4" /> {backLabel}
@@ -55,10 +56,15 @@ export function OrderDetail({ apiPath, backTo, backLabel, withTrail }: { apiPath
       </div>
     )
 
-  const h = heading(o)
+  const h = heading(o, buyerView)
   const Icon = h.icon
+  const dated = o.status === 'confirmed' && o.delivery_date
   const detailFor = (s: Step) =>
-    s.key === 'delivery' && o.status === 'confirmed' && o.delivery_date ? `Arrives ${shortDate(o.delivery_date)}` : null
+    !dated ? null
+    : s.key === 'delivery' ? `Arrives ${shortDate(o.delivery_date)}`
+    : s.key === 'out' ? `Planned for ${shortDate(o.delivery_date)}`
+    : s.key === 'delivered' ? `Expected ${shortDate(o.delivery_date)}`
+    : null
   const reliabilities = o.lines.map((l) => l.product?.delivery_reliability).filter((x): x is number => x != null)
   const worstReliability = reliabilities.length ? Math.min(...reliabilities) : null
 

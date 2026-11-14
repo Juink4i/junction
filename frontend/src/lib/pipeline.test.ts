@@ -1,5 +1,28 @@
 import { describe, expect, it } from 'vitest'
-import { orderPhase, orderSteps, runView } from './pipeline'
+import { deliverySteps, orderPhase, orderSteps, runView } from './pipeline'
+
+describe('deliverySteps (the buyer’s four stages)', () => {
+  const base = {
+    order_id: 'o', quote_id: 'q', created_at: '2026-11-14T09:00:00Z', rationale: '', question: null,
+    total_eur: 1, total_with_tax_eur: 1, lines: [], expires_at: null, delivery_date: '2026-11-16', approval: null,
+  }
+  const states = (o: object) => deliverySteps({ ...base, status: 'confirmed', reasons: [], ...o } as never).map((s) => s.state)
+
+  it('names the four stages in order', () => {
+    expect(deliverySteps({ ...base, status: 'confirmed', reasons: [] }).map((s) => s.title)).toEqual([
+      'Confirming order', 'Preparing order', 'Out for delivery', 'Delivered'])
+  })
+  it('confirmed: confirming done, preparing in progress, the last two still to come', () => {
+    expect(states({})).toEqual(['done', 'active', 'todo', 'todo'])
+  })
+  it('waiting on the buyer or a person: still confirming', () => {
+    expect(states({ status: 'pending_approval' })).toEqual(['active', 'todo', 'todo', 'todo'])
+    expect(states({ status: 'needs_clarification' })).toEqual(['active', 'todo', 'todo', 'todo'])
+  })
+  it('rejected: stops at confirming', () => {
+    expect(states({ status: 'rejected', reasons: ['Category not allowed.'] })).toEqual(['stopped', 'todo', 'todo', 'todo'])
+  })
+})
 
 describe('orderPhase', () => {
   const today = new Date(2026, 10, 16, 12) // 16 Nov 2026, local time
