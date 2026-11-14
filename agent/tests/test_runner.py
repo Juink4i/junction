@@ -30,13 +30,13 @@ async def test_hotel_order_goes_to_a_person_and_is_approved(fake):
     script = ScriptedLlm(steps=[
         lambda _: ("call", "record_request", {"product": "lactose-free milk", "amount": 1000,
                                               "unit": "L", "need_by": MONDAY,
-                                              "must_have": ["FREE_FROM_LACTOSE"]}),
-        lambda _: ("call", "search_products", {"text": "", "category": "10400",
-                                               "must_have_tags": ["FREE_FROM_LACTOSE"]}),
-        lambda _: ("call", "request_quote", {"lines": [{"product_id": "464201", "amount": 1000,
-                                                        "unit": "L"}], "need_by": MONDAY}),
-        lambda last: ("call", "place_order", {"quote_id": last["quote_id"],
-                                              "rationale": "Cheapest option that arrives on time."}),
+                                              "must_have": ["lactose-free"]}),
+        lambda _: ("call", "search_products", {"product": "lactose-free milk", "amount": 1000,
+                                               "unit": "L"}),
+        lambda last: ("call", "request_quote", {"product_ids": [p["id"] for p in last["products"]],
+                                                "amount": 1000, "unit": "L", "need_by": MONDAY}),
+        lambda last: ("call", "place_order", {"quote_id": last["options"][0]["quote"]["quote_id"],
+                                              "rationale": "Best option that arrives on time."}),
         lambda last: ("call", "get_approval_status", {"approval_id": last["approval_id"]}),
         lambda _: ("text", "Ordered 1,000 × 1 L. Approved by the procurement manager."),
     ])
@@ -54,7 +54,7 @@ async def test_hotel_order_goes_to_a_person_and_is_approved(fake):
     assert result.orders[0]["status"] == "pending_approval"
     assert result.summary.startswith("Ordered 1,000")
     kinds = [e["kind"] for e in sink.history]
-    for kind in ("run_start", "user", "request", "tool_call", "tool_result", "decision", "waiting",
+    for kind in ("run_start", "user", "request", "tool_call", "tool_result", "options", "decision", "waiting",
                  "agent", "run_end"):
         assert kind in kinds, kind
 

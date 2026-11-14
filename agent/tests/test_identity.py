@@ -24,8 +24,8 @@ def test_the_agent_key_is_made_once_and_kept_private(tmp_path):
 
 def test_an_order_signature_verifies_with_the_public_half(tmp_path):
     public_pem = ensure_agent_key("k-0000", tmp_path)
-    signature = sign_order(key_path("k-0000", tmp_path), mandate_token(), "q_1", True)
+    signature = sign_order(key_path("k-0000", tmp_path), mandate_token(), "q_1")
     public_key = serialization.load_pem_public_key(public_pem.encode())
     payload = jwt.decode(signature, public_key, algorithms=["EdDSA"])
-    assert payload == {"quote_id": "q_1", "mandate_id": "mnd_k-0000_001", "confirm_unusual": True}
+    assert payload == {"quote_id": "q_1", "mandate_id": "mnd_k-0000_001"}
     assert jwt.get_unverified_header(signature)["kid"] == "agent-k-0000"

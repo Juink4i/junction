@@ -1,13 +1,14 @@
 """The tools the buyer agent can use.
 
-Six of them are the trade server's MCP tools (Contract B), with two changes made in code
-rather than left to the AI:
-- place_order attaches the buyer's signed mandate, and signs the order with the agent's own
-  key when it has one. The AI never sees or chooses either.
+Six of them are the trade server's MCP tools (Contract B). The agent passes the buyer's words
+on and follows the server's answer. Three things are done in code rather than left to the AI:
+- The buyer's signed mandate travels with the connection, and each order is signed with the
+  agent's own key when it has one. The AI never sees or chooses either.
+- The kitchen's preferences are attached to every quote request.
 - get_approval_status keeps checking until a person decides, or the wait runs out.
 
-Three are local and only make the agent's work visible: record_request, present_options
-and ask_buyer. None of them can change what the server allows.
+Two are local and only make the agent's work visible: record_request and ask_buyer. Neither
+can change what the server allows.
 """
 
 from __future__ import annotations
@@ -15,10 +16,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from datetime import date
 from typing import Any, Awaitable, Callable, Literal
-
-from pydantic import BaseModel, Field
 
 from agent.config import Settings
 from agent.events import EventSink
@@ -26,33 +24,33 @@ from agent.identity import sign_order
 from agent.mcp_link import TradeLink
 
 AskFn = Callable[[str], Awaitable[str | None]]
-MANDATE_SHOWN_AS = "[signed mandate attached]"
 SIGNATURE_SHOWN_AS = "[signed by the agent's key]"
 
 
-class QuoteLine(BaseModel):
-    product_id: str = Field(description="Product id from search_products.")
-    amount: float = Field(description="How much is needed, in litres or kilograms (not sales units).")
-    unit: Literal["L", "KG"] = Field(description='"L" for litres or "KG" for kilograms.')
-
-
-class OptionCard(BaseModel):
-    label: str = Field(description='"best", "better" or "good" (or "split" for a split order).')
-    product_id: str
-    name: str
-    units: int | None = Field(default=None, description="Sales units to order.")
-    sales_unit: str | None = None
-    covers: float | None = Field(default=None, description="Litres or kilograms the units cover.")
-    content_unit: str | None = Field(default=None, description='"L" or "KG", the unit of covers.')
-    total_eur: float | None = None
-    available_date: str | None = None
-    trade_off: str = Field(description="One short line: what you gain and what you give up.")
-    delivery_reliability: float | None = None
-    carbon_kg_per_kg: float | None = None
-
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message, "retryable": False}}
+def option_cards(options: list[dict[str, Any]], limit: int = 3) -> list[dict[str, Any]]:
+    """The options card for the chat page, built from the server's ranked options."""
+    cards = []
+    for option in options[:limit]:
+        quote, expected = option["quote"], option.get("expected") or {}
+        lines = quote["lines"]
+        one = lines[0] if len(lines) == 1 else None
+        trade_off = option.get("trade_off", "")
+        if expected.get("status") == "pending_approval":
+            trade_off += " Needs a person's approval."
+        dates = [ln["available_date"] for ln in lines if ln.get("available_date")]
+        cards.append({
+            "label": option["label"],
+            "product_id": lines[0]["product_id"],
+            "name": one["name"] if one else " + ".join(ln["name"] for ln in lines),
+            "units": one["units"] if one else None,
+            "sales_unit": one["sales_unit"] if one else None,
+            "covers": round(sum(ln["covers"] for ln in lines), 3),
+            "content_unit": lines[0]["content_unit"],
+            "total_eur": quote["total_eur"],
+            "available_date": max(dates) if dates else None,
+            "trade_off": trade_off.strip(),
+        })
+    return cards
 
 
 class Toolbox:
@@ -62,7 +60,8 @@ class Toolbox:
         self.sink = sink
         self.ask = ask
         self.request: dict[str, Any] | None = None
-        self.quotes: list[dict[str, Any]] = []
+        self.options: dict[str, dict[str, Any]] = {}  # every option offered, by quote id
+        self.quotes: list[dict[str, Any]] = []  # the quotes that were ordered
         self.orders: list[dict[str, Any]] = []
         self.outcome: str | None = None  # last order: confirmed, pending_approval, approved, ...
 
@@ -74,6 +73,16 @@ class Toolbox:
                           ok=not (isinstance(result, dict) and "error" in result))
         return result
 
+    def _preferences(self) -> dict[str, Any]:
+        """The kitchen's own preferences, attached by code so the AI cannot change them."""
+        profile = self.settings.profile or {}
+        preferences: dict[str, Any] = {}
+        if profile.get("priorities"):
+            preferences["priorities"] = list(profile["priorities"])
+        if profile.get("pack_size") in ("small", "large"):
+            preferences["pack_size"] = profile["pack_size"]
+        return preferences
+
     def functions(self) -> list[Callable[..., Awaitable[dict[str, Any]]]]:
         box = self
 
@@ -83,13 +92,12 @@ class Toolbox:
             """Write down the buyer's request in structured form. Call this first, once.
 
             Args:
-              product: What the buyer wants, in plain words, e.g. "lactose-free milk".
+              product: What the buyer wants, in the buyer's own words, e.g. "lactose-free milk".
               amount: How much, in litres or kilograms.
               unit: "L" or "KG".
               need_by: The date it must arrive by, as YYYY-MM-DD.
-              must_have: Properties the product must have, as catalog tags when you know them,
-                e.g. ["FREE_FROM_LACTOSE"].
-              avoid: Kinds of product the buyer would not accept, e.g. ["coffee milk", "flavoured"].
+              must_have: Properties the product must have, in plain words, e.g. ["lactose-free"].
+              avoid: Kinds of product the buyer would not accept, if they said so.
               notes: Anything else the buyer said that matters.
             """
             box.request = dict(product=product, amount=amount, unit=unit, need_by=need_by,
@@ -97,25 +105,31 @@ class Toolbox:
             box.sink.publish("request", request=box.request)
             return {"recorded": True, **box.request}
 
-        async def search_products(text: str, category: str | None = None,
-                                  must_have_tags: list[str] | None = None) -> dict:
-            """Search Valio Aimo's product file. No prices here; use request_quote for those.
+        async def search_products(product: str, must_have: list[str] | None = None,
+                                  amount: float | None = None, unit: str | None = None) -> dict:
+            """Ask Valio Aimo which products fit. No prices here; use request_quote for those.
+
+            Use the buyer's own words. Valio Aimo's side maps them to its catalog, applies the
+            buyer's mandate and removes products that do a different job. The reply lists the
+            products that fit, and the ones that were dropped with a reason for each.
+
+            If the reply has status "needs_clarification", it asks for something that is missing
+            or was not understood. Answer from what the buyer said, or ask the buyer.
 
             Args:
-              text: Words to look for in the English or Finnish product name. Use few words.
-                An empty string matches everything in the category and tags.
-              category: Optional category code, e.g. "10400". Take codes from earlier results.
-              must_have_tags: Optional tags every result must have, e.g. ["FREE_FROM_LACTOSE"].
+              product: What is needed, in plain words, e.g. "lactose-free milk".
+              must_have: Properties every product must have, in plain words, e.g. ["lactose-free"].
+              amount: How much is needed, if known. It helps leave out packs of the wrong size.
+              unit: "L" or "KG", the unit of amount.
             """
-            args: dict[str, Any] = {"text": text}
-            if category:
-                args["category"] = category
-            if must_have_tags:
-                args["must_have_tags"] = must_have_tags
-            found = await box._call("search_products", args)
-            if isinstance(found, dict) and "error" in found:
-                return found
-            return {"count": len(found), "products": found}
+            args: dict[str, Any] = {"product": product}
+            if must_have:
+                args["must_have"] = must_have
+            if amount:
+                args["amount"] = amount
+            if unit:
+                args["unit"] = unit
+            return await box._call("search_products", args)
 
         async def get_product(product_id: str) -> dict:
             """Full details of one product: allergens, origin, labels, description, delivery
@@ -126,69 +140,61 @@ class Toolbox:
             """
             return await box._call("get_product", {"product_id": product_id})
 
-        async def request_quote(lines: list[QuoteLine], need_by: str) -> dict:
-            """Get real prices and delivery dates as a signed quote that expires in 15 minutes.
+        async def request_quote(product_ids: list[str], amount: float, unit: Literal["L", "KG"],
+                                need_by: str) -> dict:
+            """Get real prices and delivery dates as ranked options, best first.
 
-            Each line gives a product and the amount needed in litres or kilograms. The server
-            works out how many sales units that is. To compare options, put every candidate in
-            one quote as its own line; then ask for a fresh quote with only what you will buy.
+            Pass every product id the search returned. The server works out the sales units,
+            prices each product and ranks them. Each option is a signed quote that expires in
+            15 minutes, and says what the buyer's mandate would decide if it were ordered.
+            The buyer's preferences are attached automatically.
 
             Args:
-              lines: The products and amounts to price.
+              product_ids: Every product id from search_products.
+              amount: How much is needed, in litres or kilograms (not sales units).
+              unit: "L" for litres or "KG" for kilograms.
               need_by: Date the goods must arrive by, YYYY-MM-DD.
             """
-            try:
-                date.fromisoformat(need_by)
-            except ValueError:
-                return _err("bad_date", f'need_by must be a date like 2026-11-16, not "{need_by}".')
-            payload = {"lines": [ln.model_dump() if isinstance(ln, BaseModel) else dict(ln) for ln in lines],
-                       "need_by": need_by}
-            quote = await box._call("request_quote", payload)
-            if isinstance(quote, dict) and "quote_id" in quote:
-                box.quotes.append(quote)
-            return quote
+            args: dict[str, Any] = {"product_ids": list(product_ids), "amount": amount, "unit": unit,
+                                    "need_by": need_by}
+            preferences = box._preferences()
+            if preferences:
+                args["preferences"] = preferences
+            result = await box._call("request_quote", args)
+            if isinstance(result, dict) and result.get("options"):
+                for option in result["options"]:
+                    box.options[option["quote"]["quote_id"]] = option
+                box.sink.publish("options", title=f"Options for {amount:g} {unit}",
+                                 options=option_cards(result["options"]))
+            return result
 
-        async def present_options(title: str, options: list[OptionCard]) -> dict:
-            """Show the buyer the options you compared, best first, before ordering.
+        async def place_order(quote_id: str, rationale: str) -> dict:
+            """Order one option. The buyer's signed mandate travels with the connection.
 
-            Use labels "best", "better", "good". For substitutes, the trade-off line says what
-            changes compared with the product that was asked for.
-
-            Args:
-              title: A short heading, e.g. "Options for 1,000 L lactose-free milk".
-              options: Up to three options, best first.
-            """
-            cards = [o.model_dump() if isinstance(o, BaseModel) else dict(o) for o in options]
-            box.sink.publish("options", title=title, options=cards)
-            return {"shown": len(cards)}
-
-        async def place_order(quote_id: str, rationale: str, confirm_unusual: bool = False) -> dict:
-            """Order a quote. The buyer's signed mandate is attached automatically.
-
-            The server decides the result, not you: "confirmed", "needs_clarification" (answer
-            its question), "pending_approval" (a person must approve; then call
-            get_approval_status) or "rejected" (explain why; do not try again).
+            The server decides the result, not you: "confirmed", "pending_approval" (a person
+            must approve; then call get_approval_status) or "rejected" (explain why; do not try
+            to get around it). When it is not confirmed, the reply may list alternatives from the
+            same request that would go through without a person.
 
             Args:
-              quote_id: The id from request_quote.
+              quote_id: The quote_id of the option to order, from request_quote.
               rationale: One or two sentences on why this is the right order. It is logged.
-              confirm_unusual: Set true only after the buyer confirmed an amount the server
-                asked about.
             """
-            args = {"quote_id": quote_id, "mandate_token": box.settings.mandate_token,
-                    "rationale": rationale, "confirm_unusual": confirm_unusual}
-            shown = args | {"mandate_token": MANDATE_SHOWN_AS}
+            args: dict[str, Any] = {"quote_id": quote_id, "rationale": rationale}
+            shown = dict(args)
             if box.settings.agent_key_file:
                 args["agent_signature"] = sign_order(box.settings.agent_key_file,
-                                                     box.settings.mandate_token, quote_id, confirm_unusual)
+                                                     box.settings.mandate_token, quote_id)
                 shown["agent_signature"] = SIGNATURE_SHOWN_AS
             result = await box._call("place_order", args, shown)
             if isinstance(result, dict) and "status" in result:
+                if quote_id in box.options:
+                    box.quotes.append(box.options[quote_id]["quote"])
                 box.orders.append(result)
                 box.outcome = result["status"]
                 box.sink.publish("decision", status=result["status"], reasons=result.get("reasons", []),
-                                 question=result.get("question"), approval_id=result.get("approval_id"),
-                                 order_id=result.get("order_id"), quote_id=quote_id)
+                                 approval_id=result.get("approval_id"), order_id=result.get("order_id"),
+                                 quote_id=quote_id, alternatives=result.get("alternatives", []))
             return result
 
         async def get_approval_status(approval_id: str) -> dict:
@@ -223,8 +229,8 @@ class Toolbox:
             return status
 
         async def ask_buyer(question: str) -> dict:
-            """Ask the buyer a question and wait for the answer. Use it when the server asks you
-            to confirm something only the buyer can confirm, or when the request is unclear.
+            """Ask the buyer a question and wait for the answer. Use it when the server asks for
+            something only the buyer knows, or when the request is unclear.
 
             Args:
               question: One short, specific question.
@@ -251,5 +257,5 @@ class Toolbox:
                 return entries
             return {"entries": entries}
 
-        return [record_request, search_products, get_product, request_quote, present_options,
-                place_order, get_approval_status, ask_buyer, get_audit_log]
+        return [record_request, search_products, get_product, request_quote, place_order,
+                get_approval_status, ask_buyer, get_audit_log]

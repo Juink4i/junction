@@ -19,10 +19,10 @@ def client(fake):
 
 
 async def _pending_order(fake) -> str:
-    async with TradeLink(fake.mcp_url) as link:
-        q = await link.call("request_quote", {"lines": [{"product_id": "464201", "amount": 1000,
-                                                         "unit": "L"}], "need_by": MONDAY})
-        r = await link.call("place_order", {"quote_id": q["quote_id"], "mandate_token": "demo-hotel",
+    async with TradeLink(fake.mcp_url, "demo-hotel") as link:
+        priced = await link.call("request_quote", {"product_ids": ["464201"], "amount": 1000,
+                                                   "unit": "L", "need_by": MONDAY})
+        r = await link.call("place_order", {"quote_id": priced["options"][0]["quote"]["quote_id"],
                                             "rationale": "test"})
     return r["approval_id"]
 

@@ -38,10 +38,9 @@ def ensure_agent_key(buyer: str, buyers_dir: Path | None = None) -> str:
         serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
 
 
-def sign_order(key_file: Path, mandate_token: str, quote_id: str, confirm_unusual: bool) -> str:
+def sign_order(key_file: Path, mandate_token: str, quote_id: str) -> str:
     """The agent's signature over exactly this order."""
     key = serialization.load_pem_private_key(Path(key_file).read_bytes(), password=None)
     mandate = jwt.decode(mandate_token, options={"verify_signature": False})
-    payload = {"quote_id": quote_id, "mandate_id": mandate["mandate_id"],
-               "confirm_unusual": bool(confirm_unusual)}
+    payload = {"quote_id": quote_id, "mandate_id": mandate["mandate_id"]}
     return jwt.encode(payload, key, algorithm="EdDSA", headers={"kid": mandate["agent_id"]})

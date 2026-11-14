@@ -1,10 +1,23 @@
 from agent.events import EventSink, scrub, summarize_result
 
 
-def test_search_summary_handles_the_servers_bare_list():
-    found = [{"id": "1", "name_en": "Milk A"}, {"id": "2", "name_en": "Milk B"}]
-    assert summarize_result("search_products", found) == "2 products: Milk A; Milk B"
-    assert summarize_result("search_products", {"count": 2, "products": found}).startswith("2 products")
+def test_search_summary_says_what_fits_and_what_was_dropped():
+    found = {"status": "ok", "products": [{"id": "1", "name_en": "Milk A"}, {"id": "2", "name_en": "Milk B"}],
+             "dropped": [{"id": "3", "name": "Coffee milk", "reason": "coffee milk"}],
+             "screened_by": "keyword rules"}
+    assert summarize_result("search_products", found) == (
+        "2 products fit, 1 dropped by keyword rules: Milk A; Milk B")
+    asked = {"status": "needs_clarification", "question": "What product do you need?"}
+    assert summarize_result("search_products", asked) == "question: What product do you need?"
+
+
+def test_quote_summary_names_the_best_option():
+    priced = {"status": "ok", "options": [
+        {"label": "best", "expected": {"status": "pending_approval"}, "quote": {"total_eur": 1560.0}},
+        {"label": "better", "expected": {"status": "confirmed"}, "quote": {"total_eur": 1580.0}}]}
+    assert summarize_result("request_quote", priced) == "2 options, best: €1,560.00 (pending_approval)"
+    assert summarize_result("request_quote", {"status": "ok", "options": [], "not_offered": [{}]}) == (
+        "no options, 1 products left out")
 
 
 def test_audit_log_summary_handles_lists():

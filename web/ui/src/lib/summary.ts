@@ -13,18 +13,26 @@ export function resultSummary(tool: string | undefined, result: unknown): { text
   if (r.error) return { text: `${err.code ?? "error"}: ${err.message ?? short(r.error)}`, error: true }
   switch (tool) {
     case "search_products": {
+      if (r.status === "needs_clarification") return { text: `Valio Aimo asks: ${r.question ?? ""}`, error: false }
       const items = list(result, "products")
+      const dropped = list(r.dropped, "dropped")
       const names = items.slice(0, 3).map((p) => String(p.name_en ?? p.name_fi ?? p.id ?? ""))
-      return { text: `${items.length} products · ${names.join(" · ")}${items.length > 3 ? " …" : ""}`, error: false }
+      return {
+        text: `${items.length} fit, ${dropped.length} dropped by ${r.screened_by ?? "the server"} · ${names.join(" · ")}${items.length > 3 ? " …" : ""}`,
+        error: false,
+      }
     }
     case "get_product":
       return { text: `${r.id ?? ""} ${r.name_en ?? ""}`.trim(), error: false }
     case "request_quote": {
-      const lines = list(r.lines, "lines").map(
-        (l) =>
-          `${num(l.units)} × ${l.sales_unit ?? "unit"} ${l.name ?? ""} (${num(l.covers)} ${l.content_unit ?? ""}) ${eur(l.line_total_eur)}${l.cutoff_passed ? " · cut-off passed" : ""}`,
+      if (r.status === "needs_clarification") return { text: `Valio Aimo asks: ${r.question ?? ""}`, error: false }
+      const options = list(r.options, "options")
+      if (!options.length) return { text: `no options · ${list(r.not_offered, "not_offered").length} left out`, error: false }
+      const quote = asObj(options[0].quote)
+      const lines = list(quote.lines, "lines").map(
+        (l) => `${num(l.units)} × ${l.sales_unit ?? "unit"} ${l.name ?? ""} (${num(l.covers)} ${l.content_unit ?? ""})`,
       )
-      return { text: `quote ${r.quote_id ?? ""} · ${eur(r.total_eur)} — ${lines.join("; ")}`, error: false }
+      return { text: `${options.length} options · best ${eur(quote.total_eur)} — ${lines.join(" + ")}`, error: false }
     }
     case "place_order":
       return { text: String(r.status ?? short(result)), error: false }

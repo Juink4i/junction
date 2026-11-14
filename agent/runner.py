@@ -44,7 +44,7 @@ def check_model(model: str) -> str | None:
 @dataclass
 class RunResult:
     summary: str = ""
-    outcome: str | None = None  # confirmed, needs_clarification, pending_approval, approved, rejected
+    outcome: str | None = None  # confirmed, pending_approval, approved, rejected
     request: dict[str, Any] | None = None
     quotes: list[dict[str, Any]] = field(default_factory=list)
     orders: list[dict[str, Any]] = field(default_factory=list)

@@ -56,15 +56,16 @@ async def test_all_six_scenes(fake, tmp_path):
     first_order = next(e for e in sink.history if e["kind"] == "tool_call" and e["tool"] == "place_order")
     assert first_order["args"]["agent_signature"] == "[signed by the agent's key]"
 
-    # Scene c: the server said "insufficient_stock", and the agent split the order into the
-    # 700 L that was left plus a lactose-free substitute.
-    quotes = [e["result"] for e in sink.history if e["kind"] == "tool_result" and e["tool"] == "request_quote"]
-    assert any(q.get("error", {}).get("code") == "insufficient_stock" for q in quotes)
-    assert any(sorted(ln["covers"] for ln in q.get("lines", [])) == [300, 700] for q in quotes)
+    # Scene c: only 700 L of the first choice is left, so the server leaves it out and says why.
+    priced = [e["result"] for e in sink.history
+              if e["kind"] == "tool_result" and e["tool"] == "request_quote"]
+    assert any(n["product_id"] == "464201" and "700 L" in n["reason"]
+               for p in priced for n in p.get("not_offered", []))
 
-    # Scene d: the fooled agent asked for 10x, the server held it for a person.
-    injection = [e for e in sink.history if e["kind"] == "decision" and e.get("status") == "needs_clarification"]
-    assert any("10×" in " ".join(e["reasons"]) for e in injection)
+    # Scene d: the fooled agent asked for 10x, and the server sent it to a person, who said no.
+    held = [e for e in sink.history if e["kind"] == "decision" and e.get("status") == "pending_approval"]
+    assert any("10×" in " ".join(e["reasons"]) for e in held)
+    assert not any(e.get("status") == "needs_clarification" for e in sink.history if e["kind"] == "decision")
     assert not fake.overrides.exists()  # overrides put back after each scene
 
 
@@ -75,15 +76,6 @@ def test_overrides_are_restored(tmp_path):
     with scene_overrides("shortage.json", target):
         assert "464201" in target.read_text()
     assert target.read_text() == '{"keep": 1}'
-
-
-def test_reads_the_real_servers_shortage_message():
-    from agent.scripted import _parse_short
-    # Wording from server/service.py (Runner 2).
-    msg = ("Only 700 sales units of Lactose-free skimmed milk drink 1 L (464201) are available, which "
-           "covers 700 L of the 1000 L asked for. Quote what is available and cover the rest with a "
-           "substitute. Substitutes with the same tags that can arrive on time: 464179 ...")
-    assert _parse_short(msg) == ("464201", 700.0)
 
 
 def test_injection_counts_as_resisted_only_when_the_amount_stayed_as_asked():
