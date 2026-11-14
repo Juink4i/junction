@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent conversation</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    #feed { display: flex; flex-direction: column; gap: 10px; padding-bottom: 40px; }
+    .row { display: flex; animation: pop 0.22s ease-out; }
+    .row.right { justify-content: flex-end; }
+    .who { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 3px; }
+    .bubble { max-width: 86%; padding: 10px 14px; border-radius: 16px; }
+    .bubble p { margin: 0 0 6px; } .bubble p:last-child { margin-bottom: 0; }
+    .bubble ul { margin: 4px 0 6px; padding-left: 20px; }
+    .buyer .bubble { background: var(--brand); color: var(--brand-ink); border-bottom-right-radius: 4px; }
+    .buyer .who { color: color-mix(in srgb, var(--brand-ink) 75%, transparent); }
+    .agent .bubble { background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; box-shadow: var(--shadow); }
+    .agent .who { color: var(--brand); }
+    .ask .bubble { border: 1.5px solid var(--info); background: var(--info-soft); }
+
+    .tool { margin-left: 18px; font-size: 13px; border-left: 2px solid var(--line); padding-left: 10px; }
+    .tool summary { cursor: pointer; list-style: none; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; color: var(--muted); }
+    .tool summary::-webkit-details-marker { display: none; }
+    .tool .name { font-family: var(--mono); color: var(--ink); font-weight: 600; }
+    .tool .args { font-family: var(--mono); font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
+    .tool .res { color: var(--ink); }
+    .tool .res.err { color: var(--bad); }
+    .tool pre { margin: 6px 0 2px; padding: 10px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line);
+      font-family: var(--mono); font-size: 11.5px; max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+
+    .decision { border-radius: var(--radius); padding: 12px 14px; border: 1.5px solid; background: var(--surface); }
+    .decision .top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .decision .status { font-weight: 700; font-size: 15px; }
+    .decision ul { margin: 8px 0 0; padding-left: 20px; font-size: 14px; }
+    .decision .q { margin-top: 8px; font-size: 14px; font-style: italic; }
+    .decision.ok { border-color: var(--ok); } .decision.ok .status { color: var(--ok); }
+    .decision.warn { border-color: var(--warn); } .decision.warn .status { color: var(--warn); }
+    .decision.info { border-color: var(--info); } .decision.info .status { color: var(--info); }
+    .decision.bad { border-color: var(--bad); } .decision.bad .status { color: var(--bad); }
+    .decision .by { margin-left: auto; }
+
+    .request, .options { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); }
+    .request h4, .options h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+    .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 14px; }
+    .kv dt { color: var(--muted); } .kv dd { margin: 0; font-weight: 600; }
+    .opt { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; padding: 8px 0; border-top: 1px solid var(--line); align-items: start; }
+    .opt:first-of-type { border-top: 0; }
+    .opt .lab { text-transform: uppercase; font-size: 11px; }
+    .opt .nm { font-weight: 600; font-size: 14px; }
+    .opt .tot { font-weight: 700; text-align: right; }
+    .opt .meta { grid-column: 2 / span 2; font-size: 12.5px; color: var(--muted); }
+    .opt .trade { grid-column: 2 / span 2; font-size: 13px; }
+
+    .scene { margin: 18px 0 4px; padding: 14px 16px; border-radius: var(--radius); background: var(--ink); color: var(--bg); }
+    .scene .t { font-size: 18px; font-weight: 750; letter-spacing: -0.01em; }
+    .scene .s { font-size: 13.5px; opacity: 0.8; margin-top: 2px; }
+    .meta-row { text-align: center; font-size: 12px; color: var(--faint); }
+    .waiting { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--radius);
+      background: var(--warn-soft); color: var(--warn); font-weight: 600; font-size: 14px; }
+    .waiting.done { opacity: 0.6; }
+    .waiting.done .spinner { display: none; }
+    .verify { padding: 14px 16px; border-radius: var(--radius); font-weight: 700; font-size: 16px; }
+    .verify.ok { background: var(--ok-soft); color: var(--ok); }
+    .verify.bad { background: var(--bad-soft); color: var(--bad); }
+    .note { font-size: 13px; color: var(--muted); text-align: center; }
+    #jump { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); }
+  </style>
+</head>
+<body>
+  <header class="bar">
+    <div class="grow">
+      <h1>Agent conversation</h1>
+      <p class="sub">What the buyer agent says and does, live. <span class="pill brand">AI</span> suggests, <span class="pill code">code</span> decides.</p>
+    </div>
+    <span id="live" class="live">connecting</span>
+  </header>
+  <main class="wrap">
+    <div id="feed"></div>
+    <div id="empty" class="empty"><div class="big">💬</div>Waiting for the agent. Run <code class="mono">uv run python -m agent "…"</code> or the demo.</div>
+  </main>
+  <button id="jump" class="btn hidden">↓ Latest</button>
+
+  <script src="/static/common.js"></script>
+  <script>
+    const feed = document.getElementById("feed");
+    const calls = new Map();     // call_id -> element
+    const waits = new Map();     // approval_id -> element
+    let lastId = 0;
+    let follow = true;
+    let agentLabel = "Buyer agent · AI";
+
+    const short = (o) => {
+      const s = typeof o === "string" ? o : JSON.stringify(o ?? {});
+      return s.length > 160 ? s.slice(0, 159) + "…" : s;
+    };
+
+    function resultSummary(tool, r) {
+      if (r && r.error) return { text: `${r.error.code}: ${r.error.message}`, err: true };
+      if (tool === "search_products") {
+        const items = Array.isArray(r) ? r : (r.products ?? []);
+        const names = items.slice(0, 3).map((p) => p.name_en || p.name_fi);
+        return { text: `${items.length} products · ${names.join(" · ")}${items.length > 3 ? " …" : ""}` };
+      }
+      if (tool === "get_product") return { text: `${r.id} ${r.name_en ?? ""}` };
+      if (tool === "request_quote") {
+        const lines = (r.lines ?? []).map((l) => `${num(l.units)} × ${l.sales_unit} ${l.name} (${num(l.covers)} ${l.content_unit}) ${eur(l.line_total_eur)}${l.cutoff_passed ? " · cut-off passed" : ""}`);
+        return { text: `quote ${r.quote_id} · ${eur(r.total_eur)} — ${lines.join("; ")}` };
+      }
+      if (tool === "place_order") return { text: `${r.status}` };
+      if (tool === "get_approval_status") return { text: `${r.status}${r.decided_by ? " by " + r.decided_by : ""}` };
+      if (tool === "get_audit_log") return { text: `${(r.entries ?? []).length} log entries` };
+      return { text: short(r) };
+    }
+
+    function add(el) {
+      document.getElementById("empty").classList.add("hidden");
+      feed.appendChild(el);
+      if (follow) requestAnimationFrame(() => window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" }));
+      else document.getElementById("jump").classList.remove("hidden");
+      return el;
+    }
+
+    function div(cls, html) {
+      const el = document.createElement("div");
+      el.className = cls; el.innerHTML = html; return el;
+    }
+
+    const render = {
+      clear() { feed.innerHTML = ""; calls.clear(); waits.clear(); document.getElementById("empty").classList.remove("hidden"); },
+      scene(e) { add(div("scene", `<div class="t">${esc(e.title)}</div><div class="s">${esc(e.subtitle ?? "")}</div>`)); },
+      run_start(e) {
+        agentLabel = String(e.model ?? "").startsWith("scripted") ? "Buyer agent · scripted, no AI" : "Buyer agent · AI";
+        add(div("meta-row", `${esc(e.buyer_name ?? e.buyer)} · buyer agent on ${esc(e.model)}${e.gullible ? ' · <span class="pill bad">demo: simulated compromised agent</span>' : ""}`));
+      },
+      user(e) { add(div("row right buyer", `<div class="bubble"><div class="who">Buyer</div>${md(e.text)}</div>`)); },
+      request(e) {
+        const r = e.request ?? {};
+        add(div("request", `<h4>Structured request · written by the agent</h4><dl class="kv">
+          <dt>Product</dt><dd>${esc(r.product)}</dd>
+          <dt>Amount</dt><dd>${num(r.amount)} ${esc(r.unit)}</dd>
+          <dt>Need by</dt><dd>${dayLabel(r.need_by)} (${esc(r.need_by)})</dd>
+          <dt>Must have</dt><dd>${(r.must_have ?? []).map((t) => `<span class="pill">${esc(t)}</span>`).join(" ") || "—"}</dd>
+          ${(r.avoid ?? []).length ? `<dt>Avoid</dt><dd>${esc(r.avoid.join(", "))}</dd>` : ""}
+          ${r.notes ? `<dt>Notes</dt><dd>${esc(r.notes)}</dd>` : ""}</dl>`));
+      },
+      agent(e) { add(div("row agent", `<div class="bubble"><div class="who">${esc(agentLabel)}</div>${md(e.text)}</div>`)); },
+      tool_call(e) {
+        const el = div("tool", `<details><summary><span class="pill">MCP</span><span class="name">${esc(e.tool)}</span>
+          <span class="args">${esc(short(e.args))}</span><span class="res"><span class="spinner"></span></span></summary>
+          <pre>${esc(JSON.stringify(e.args, null, 2))}</pre></details>`);
+        calls.set(e.call_id, el); add(el);
+      },
+      tool_result(e) {
+        const el = calls.get(e.call_id);
+        if (!el) return;
+        const s = resultSummary(e.tool, e.result ?? {});
+        const res = el.querySelector(".res");
+        res.className = "res" + (s.err ? " err" : "");
+        res.textContent = "→ " + s.text;
+        const pre = document.createElement("pre");
+        const json = JSON.stringify(e.result, null, 2);
+        pre.textContent = json.length > 6000 ? json.slice(0, 6000) + "\n…" : json;
+        el.querySelector("details").appendChild(pre);
+      },
+      options(e) {
+        const rows = (e.options ?? []).map((o) => {
+          const lab = String(o.label ?? "").toLowerCase();
+          const cls = lab === "best" ? "ok" : lab === "better" ? "info" : "";
+          const extra = [
+            o.units != null ? `${num(o.units)} × ${esc(o.sales_unit ?? "unit")}` : "",
+            o.covers != null ? `covers ${num(o.covers)} ${esc(o.content_unit ?? "")}` : "",
+            o.available_date ? `arrives ${dayLabel(o.available_date)}` : "",
+            o.delivery_reliability != null ? `${Math.round(o.delivery_reliability * 100)}% delivered as ordered` : "",
+            o.carbon_kg_per_kg != null ? `${num(o.carbon_kg_per_kg)} kg CO₂e/kg` : "",
+          ].filter(Boolean).join(" · ");
+          return `<div class="opt"><span class="pill ${cls} lab">${esc(o.label)}</span>
+            <span class="nm">${esc(o.name)}</span><span class="tot">${eur(o.total_eur)}</span>
+            <span class="meta">${extra}</span><span class="trade">${esc(o.trade_off)}</span></div>`;
+        }).join("");
+        add(div("options", `<h4>${esc(e.title ?? "Options")} · ranked by the agent</h4>${rows}`));
+      },
+      ask(e) { add(div("row agent ask", `<div class="bubble"><div class="who">Agent asks the buyer</div>${md(e.question)}</div>`)); },
+      answer(e) { add(div("row right buyer", `<div class="bubble"><div class="who">Buyer</div>${md(e.text)}</div>`)); },
+      waiting(e) {
+        const el = div("waiting", `<span class="spinner"></span><span class="txt">Waiting for a person to approve on the phone…</span>`);
+        waits.set(e.approval_id, el); add(el);
+      },
+      decision(e) {
+        const s = STATUS[e.status] ?? { cls: "", icon: "•", label: e.status };
+        const w = e.approval_id && waits.get(e.approval_id);
+        if (w && ["approved", "rejected", "pending"].includes(e.status)) {
+          w.classList.add("done");
+          w.querySelector(".txt").textContent = e.status === "pending"
+            ? "Nobody decided yet. The order stays on hold." : `Decision received: ${e.status}.`;
+        }
+        let label = s.label;
+        if (e.status === "rejected" && e.decided_by) label = "Rejected by a person";
+        const by = e.decided_by ? `<span class="by faint">${esc(e.decided_by)}</span>` : "";
+        const src = e.decided_by ? `<span class="pill ok">person</span>` : `<span class="pill code">trade server rules · code</span>`;
+        add(div(`decision ${s.cls}`, `<div class="top">${src}
+          <span class="status">${s.icon} ${esc(label)}</span>${by}</div>
+          ${(e.reasons ?? []).length ? `<ul>${e.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+          ${e.question ? `<div class="q">Server asks: “${esc(e.question)}”</div>` : ""}`));
+      },
+      verify(e) {
+        add(div(`verify ${e.ok ? "ok" : "bad"}`, e.ok
+          ? `🔒 Verify log: intact. ${e.count ? esc(e.count) + " entries, " : ""}every hash matches.`
+          : `Verify log: broken at entry #${esc(e.broken_at_seq)}.`));
+      },
+      note(e) { add(div("note", esc(e.text))); },
+      run_end(e) { if (e.error) add(div("note", "The agent stopped: " + esc(e.error))); },
+    };
+
+    function handle(e) {
+      if (e.id && e.id < lastId && e.kind !== "clear") render.clear();  // server restarted
+      lastId = e.id ?? lastId;
+      (render[e.kind] ?? (() => {}))(e);
+    }
+
+    function connect() {
+      const live = document.getElementById("live");
+      const src = new EventSource("/api/events/stream");
+      src.onopen = () => { live.className = "live on"; live.textContent = "live"; };
+      src.onerror = () => { live.className = "live off"; live.textContent = "reconnecting"; };
+      src.onmessage = (m) => { try { handle(JSON.parse(m.data)); } catch (err) { console.error(err); } };
+    }
+
+    window.addEventListener("scroll", () => {
+      follow = window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
+      if (follow) document.getElementById("jump").classList.add("hidden");
+    });
+    document.getElementById("jump").addEventListener("click", () => {
+      follow = true; window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+      document.getElementById("jump").classList.add("hidden");
+    });
+    connect();
+  </script>
+</body>
+</html>

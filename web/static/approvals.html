@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b5770">
+  <title>Approvals</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    body { max-width: 480px; margin: 0 auto; min-height: 100vh; }
+    .who { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .who strong { font-size: 15px; }
+    .total { font-size: 30px; font-weight: 750; letter-spacing: -0.02em; margin: 6px 0 0; }
+    .sum { font-size: 13px; color: var(--muted); }
+    .sum strong { color: var(--ink); }
+    .lines { list-style: none; margin: 10px 0 0; padding: 0; border-top: 1px solid var(--line); }
+    .lines li { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 8px 0;
+      border-bottom: 1px solid var(--line); font-size: 13.5px; }
+    .lines .qty { color: var(--muted); font-size: 12.5px; grid-column: 1; }
+    .lines .amt { font-weight: 600; grid-row: 1 / span 2; grid-column: 2; align-self: center; }
+    .why { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--warn-soft); }
+    .why h3, .agent h3 { margin: 0 0 4px; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .why h3 { color: var(--warn); }
+    .why ul { margin: 0; padding-left: 18px; font-size: 13.5px; }
+    .why .src { font-size: 11.5px; color: var(--warn); margin-top: 4px; opacity: 0.85; }
+    .agent { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
+    .agent h3 { color: var(--faint); }
+    .agent q { font-style: italic; }
+    .actions { display: grid; grid-template-columns: 1fr 1.4fr; gap: 10px; margin-top: 14px; }
+    .actions .btn { min-height: 50px; font-size: 16px; }
+    .done { margin-top: 14px; padding: 12px; border-radius: 10px; text-align: center; font-weight: 650; }
+    .done.ok { background: var(--ok-soft); color: var(--ok); }
+    .done.bad { background: var(--bad-soft); color: var(--bad); }
+    .card.leaving { transition: opacity 0.5s, transform 0.5s; opacity: 0; transform: translateX(30px); }
+    .count { min-width: 22px; height: 22px; border-radius: 11px; background: var(--warn); color: #fff;
+      font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; padding: 0 6px; }
+  </style>
+</head>
+<body>
+  <header class="bar">
+    <div class="grow">
+      <h1>Approvals <span id="count" class="count hidden">0</span></h1>
+      <p class="sub">Orders your buying agent was not allowed to place alone</p>
+    </div>
+    <span id="live" class="live">connecting</span>
+  </header>
+
+  <main class="wrap stack">
+    <div id="error" class="banner bad hidden"></div>
+    <div id="list" class="stack"></div>
+    <div id="empty" class="empty hidden">
+      <div class="big">✓</div>
+      <div><strong>Nothing waiting for you</strong></div>
+      <div class="faint">New requests appear here automatically.</div>
+    </div>
+  </main>
+
+  <script src="/static/common.js"></script>
+  <script>
+    const list = document.getElementById("list");
+    const cards = new Map();   // approval id -> element
+    const settled = new Set(); // decided on this page, keep showing the result briefly
+    let first = true;
+
+    const idOf = (a) => a.approval_id ?? a.id;
+
+    function lineHTML(l) {
+      const units = l.units != null ? `${num(l.units)} × ${esc(l.sales_unit ?? "unit")}` : "";
+      const covers = l.covers != null ? ` · ${num(l.covers)} ${esc(l.content_unit ?? "")}` : "";
+      const when = l.available_date ? ` · arrives ${dayLabel(l.available_date)}` : "";
+      return `<li><span>${esc(l.name ?? l.product_id)}</span>
+        <span class="amt">${eur(l.line_total_eur)}</span>
+        <span class="qty">${units}${covers}${when}</span></li>`;
+    }
+
+    function cardHTML(a) {
+      const quote = a.quote ?? {};
+      const lines = a.lines ?? quote.lines ?? [];
+      const total = a.total_eur ?? quote.total_eur;
+      const reasons = a.reasons ?? [];
+      const buyer = a.buyer ?? a.buyer_name ?? a.mandate?.buyer ?? "Buyer";
+      const needBy = a.need_by ?? quote.need_by;
+      const created = a.created_at ?? a.time;
+      return `
+        <div class="who"><strong>${esc(buyer)}</strong><span class="faint">${created ? ago(created) : ""}</span></div>
+        <div class="total">${eur(total)}</div>
+        <div class="sum">excl. VAT${needBy ? ` · needed by <strong>${dayLabel(needBy)}</strong>` : ""}</div>
+        ${lines.length ? `<ul class="lines">${lines.map(lineHTML).join("")}</ul>` : ""}
+        <div class="why"><h3>Why it needs you</h3>
+          <ul>${reasons.map((r) => `<li>${esc(r)}</li>`).join("") || "<li>The buyer's rules require a person.</li>"}</ul>
+          <div class="src">Checked by the trade server's rules, not by the AI.</div></div>
+        ${(a.agent_rationale ?? a.rationale) ? `<div class="agent"><h3>The agent's reason</h3><q>${esc(a.agent_rationale ?? a.rationale)}</q></div>` : ""}
+        <div class="actions">
+          <button class="btn reject" data-act="reject">Reject</button>
+          <button class="btn approve" data-act="approve">Approve</button>
+        </div>`;
+    }
+
+    async function decide(id, act, el) {
+      el.querySelectorAll("button").forEach((b) => (b.disabled = true));
+      const btn = el.querySelector(`[data-act="${act}"]`);
+      btn.innerHTML = `<span class="spinner"></span>`;
+      try {
+        const res = await getJSON(`/api/approvals/${encodeURIComponent(id)}/${act}`, { method: "POST" });
+        settled.add(id);
+        render();
+        const ok = act === "approve";
+        const by = res && res.decided_by ? ` by ${esc(res.decided_by)}` : "";
+        el.querySelector(".actions").outerHTML =
+          `<div class="done ${ok ? "ok" : "bad"}">${ok ? "✓ Approved" : "✕ Rejected"}${by}</div>`;
+        setTimeout(() => { el.classList.add("leaving"); setTimeout(() => { el.remove(); cards.delete(id); render(); }, 500); }, 2500);
+      } catch (e) {
+        el.querySelectorAll("button").forEach((b) => (b.disabled = false));
+        btn.textContent = act === "approve" ? "Approve" : "Reject";
+        showError(`Could not ${act}: ${e.message}`);
+      }
+    }
+
+    function showError(msg) {
+      const box = document.getElementById("error");
+      box.textContent = msg; box.classList.toggle("hidden", !msg);
+    }
+
+    function render(items) {
+      if (items) {
+        const ids = new Set(items.map(idOf));
+        for (const a of items) {
+          const id = idOf(a);
+          if (cards.has(id) || settled.has(id)) continue;
+          const el = document.createElement("article");
+          el.className = "card";
+          el.innerHTML = cardHTML(a);
+          el.addEventListener("click", (ev) => {
+            const act = ev.target.closest("button")?.dataset.act;
+            if (act) decide(id, act, el);
+          });
+          list.prepend(el);
+          cards.set(id, el);
+          if (!first && navigator.vibrate) navigator.vibrate(180);
+        }
+        for (const [id, el] of cards) {   // decided elsewhere
+          if (!ids.has(id) && !settled.has(id)) { el.remove(); cards.delete(id); }
+        }
+        first = false;
+      }
+      const waiting = [...cards.keys()].filter((id) => !settled.has(id)).length;
+      const count = document.getElementById("count");
+      count.textContent = waiting; count.classList.toggle("hidden", waiting === 0);
+      document.title = waiting ? `(${waiting}) Approvals` : "Approvals";
+      document.getElementById("empty").classList.toggle("hidden", cards.size > 0);
+    }
+
+    async function poll() {
+      const live = document.getElementById("live");
+      try {
+        const body = await getJSON("/api/approvals");
+        const items = asList(body, "approvals", "items")
+          .filter((a) => !a.status || a.status === "pending" || a.status === "pending_approval");
+        render(items);
+        showError("");
+        live.className = "live on"; live.textContent = "live";
+      } catch (e) {
+        live.className = "live off"; live.textContent = "offline";
+        showError(`Can't reach the trade server: ${e.message}`);
+      }
+      setTimeout(poll, 2000);
+    }
+    poll();
+  </script>
+</body>
+</html>
