@@ -128,6 +128,8 @@ What the code does around it (`agent/tools.py`):
 - `get_approval_status` keeps checking until a person decides, instead of the model polling.
 - Everything the agent prints or streams is scrubbed of key values. The agent process only loads
   the Gemini key, never the Valio Aimo key.
+- A test (`agent/tests/test_instructions.py`) fails if a limit, allergen rule, price threshold or
+  catalog code appears in the instructions.
 
 ## Open standards
 
