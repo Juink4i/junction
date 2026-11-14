@@ -209,7 +209,10 @@ class Service:
         candidates = found[:CANDIDATE_LIMIT]
 
         need = Need(" ".join(str(product).split()), tuple(vocabulary.names(tags)), amount, unit)
-        screening = self.seller.screen(need, candidates)
+        try:
+            screening = self.seller.screen(need, candidates)
+        except Exception:  # a search never fails because of the seller
+            screening = KeywordSeller().screen(need, candidates)
         kept, dropped = [], []
         for p in candidates:  # only candidates are looked at, so the seller cannot add a product
             verdict = screening.verdicts.get(p.id) or keyword_verdict(need, p)

@@ -7,6 +7,7 @@ seller agent that uses them as its fallback is added below them.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,6 +23,19 @@ WRONG_KINDS = [
     ("cream", ("cream", "kerma")),
     ("portion pack", ("portion", "annos")),
 ]
+
+# Finnish words are stems: Finnish builds compounds, so "kahvimaito" and "ruokakerma" hide
+# the stem inside a longer word. These match anywhere in the text.
+FINNISH_STEMS = frozenset({"kahvi", "kaakao", "vanilja", "piimä", "jogurtti", "vähälaktoosinen",
+                           "kaura", "soija", "manteli", "kerma", "annos"})
+
+
+def _mentions(word: str, text: str) -> bool:
+    # English words are separate words, so "oat" must not match inside "goat" and "sour" not
+    # inside "sourdough"; an optional plural "s" is allowed. Finnish stems match anywhere.
+    if word in FINNISH_STEMS:
+        return word in text
+    return re.search(rf"(?<!\w){re.escape(word)}s?(?!\w)", text) is not None
 
 
 @dataclass(frozen=True)
@@ -48,9 +62,9 @@ def keyword_verdict(need: Need, candidate: Any) -> Verdict:
     asked = need.product.lower()
     name = f"{candidate.name_en} {candidate.name_fi}".lower()
     for kind, words in WRONG_KINDS:
-        if any(word in asked for word in words):
+        if any(_mentions(word, asked) for word in words):
             continue
-        if any(word in name for word in words):
+        if any(_mentions(word, name) for word in words):
             return Verdict(False, kind)
     return Verdict(True)
 

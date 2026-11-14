@@ -152,6 +152,11 @@ class Named:
     ("milk", "Arla Portion milk 100x2 cl lactose free 1,5% UHT", False),
     ("coffee milk", "Valio coffee milk 1 l lactose free UHT", True),   # asked for by name
     ("ice cream", "Dairy ice cream 5 L", True),                         # cream asked for by name
+    ("milk", "Goat milk 1 l", True),                  # "oat" inside "goat" is not oat
+    ("bread", "Sourdough bread 500 g", True),         # "sour" inside "sourdough"
+    ("soup", "Cafeteria soup base", True),            # "cafe" inside "cafeteria"
+    ("milk", "Oat drink 1 l", False),
+    ("milk", "Oats drink 1 l", False),                # plural
 ])
 def test_keyword_rules_drop_other_kinds_unless_asked_for_by_name(asked, name, kept):
     assert keyword_verdict(Need(asked), Named(name)).keep is kept
@@ -160,6 +165,29 @@ def test_keyword_rules_drop_other_kinds_unless_asked_for_by_name(asked, name, ke
 def test_keyword_rules_read_the_finnish_name_too():
     verdict = keyword_verdict(Need("milk"), Named("Laktoositon 1 l", "Laktoositon kahvimaito 1 l"))
     assert (verdict.keep, verdict.reason) == (False, "coffee milk or coffee drink")
+
+
+@pytest.mark.parametrize("name_en, name_fi, reason", [
+    ("Cooking cream 2 dl", "Ruokakerma 2 dl", "cream"),
+    ("Yoghurt drink", "Valiojogurtti 1 kg", "yoghurt"),
+])
+def test_finnish_stems_match_inside_compound_words(name_en, name_fi, reason):
+    verdict = keyword_verdict(Need("milk"), Named(name_en, name_fi))
+    assert (verdict.keep, verdict.reason) == (False, reason)
+
+
+def test_a_seller_that_raises_does_not_fail_the_search():
+    class Broken:
+        def screen(self, need, candidates):
+            raise RuntimeError("model unavailable")
+
+    svc = Service(connect(":memory:"), fake_catalog, Clock(), seller=Broken())
+    hotel = svc.authenticate(issue_demo_mandates(svc.conn)["hotel"])
+    found = svc.search_products(hotel, "milk")
+    assert found["status"] == "ok"
+    assert ids(found) == ["464201", "465039", "463038", "464179"]
+    assert [d["id"] for d in found["dropped"]] == ["464500"]
+    assert found["screened_by"] == "keyword rules"
 
 
 def test_the_keyword_seller_answers_for_every_candidate():
