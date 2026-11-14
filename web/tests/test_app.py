@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import date, timedelta
 
 import httpx
@@ -32,6 +33,16 @@ def test_pages_load(client, path, title):
     res = client.get(path)
     assert res.status_code == 200
     assert title in res.text
+
+
+@pytest.mark.parametrize("path", ["/", "/approvals", "/log", "/chat", "/onboarding"])
+def test_every_page_finds_its_built_scripts_and_styles(client, path):
+    # The pages are built from web/ui (npm run build). A missing or stale build shows here.
+    page = client.get(path).text
+    assets = re.findall(r'(?:src|href)="(/static/[^"]+)"', page)
+    assert any(a.endswith(".js") for a in assets) and any(a.endswith(".css") for a in assets)
+    for asset in assets:
+        assert client.get(asset).status_code == 200, asset
 
 
 async def test_approve_from_the_phone_page(client, fake):

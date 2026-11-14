@@ -1,6 +1,8 @@
 """The demo screens: approval page (phone), decision log, live agent chat, and a stage view.
 
-The pages are plain HTML and JavaScript in web/static. This server:
+The pages are React + shadcn/ui, written in web/ui and built into web/static
+(cd web/ui && npm install && npm run build). The build is committed, so this server needs
+no Node.js to run. This server:
 - serves them,
 - forwards /api/approvals and /api/log calls to the trade server's HTTP endpoints
   (Contract B), so the browser only ever talks to one origin,

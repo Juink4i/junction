@@ -63,6 +63,15 @@ Tests: `uv run pytest`
 
 ## The screens
 
+React + [shadcn/ui](https://ui.shadcn.com) (Tailwind, Radix), in `web/ui/`. The built pages
+are committed in `web/static/`, so `uv run python -m web` needs no Node.js. To change a screen:
+
+```bash
+cd web/ui && npm install    # once
+npm run dev                 # live reload on :5173; /api goes to the web server on :8080
+npm run build               # writes web/static/, commit it with the source
+```
+
 | URL | What it shows |
 |---|---|
 | `/` | Stage view for the pitch: live chat on the left, the manager's phone on the right |
