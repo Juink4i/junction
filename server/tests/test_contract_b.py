@@ -1,5 +1,6 @@
 """Contract B, through a real MCP client and the HTTP endpoints."""
 
+import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -175,8 +176,13 @@ async def test_log_verify_endpoint_finds_a_row_edited_by_hand():
 
 def test_a_broken_real_catalog_is_an_error_not_a_silent_fallback(tmp_path, monkeypatch):
     (tmp_path / "catalog").mkdir()
+    (tmp_path / "catalog" / "__init__.py").write_text("")
     (tmp_path / "catalog" / "api.py").write_text("import a_dependency_that_is_missing\n")
     monkeypatch.setattr(server_app, "REPO_ROOT", tmp_path)
+    # Import the broken catalog from tmp_path, not the real one already on sys.path.
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for name in [m for m in sys.modules if m == "catalog" or m.startswith("catalog.")]:
+        monkeypatch.delitem(sys.modules, name)
     with pytest.raises(ImportError):
         server_app.load_catalog()
 
