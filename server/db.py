@@ -1,7 +1,8 @@
+import os
 import sqlite3
 from pathlib import Path
 
-STATE_DB = Path(__file__).resolve().parent.parent / "data" / "state.db"
+STATE_DB = Path(os.environ.get("STATE_DB") or Path(__file__).resolve().parent.parent / "data" / "state.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS keys (
