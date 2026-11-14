@@ -1,7 +1,5 @@
 """The onboarding page and its routes, against the fake trade server."""
 
-import re
-
 import jwt
 import pytest
 from starlette.testclient import TestClient
@@ -82,10 +80,8 @@ def test_a_body_that_is_not_an_object_is_a_bad_request(client):
 
 def test_the_stage_phone_frame_can_follow_the_scene(client):
     page = client.get("/").text
-    script = re.search(r'<script type="module"[^>]*src="([^"]+)"', page).group(1)
-    bundle = client.get(script).text  # the stage is built from web/ui/src/pages/stage.tsx
-    assert "phoneframe" in bundle and "phonelabel" in bundle
-    assert "/onboarding?preset=" in bundle
+    assert 'id="phoneframe"' in page and 'id="phonelabel"' in page
+    assert "/onboarding?preset=" in page
 
 
 def test_sign_up_gives_the_agent_its_own_key(client, tmp_path):
