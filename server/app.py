@@ -1,6 +1,8 @@
 """MCP server "valio-aimo-trade": six tools plus plain HTTP for the screens."""
 
+import importlib
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -10,7 +12,6 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from server import audit
 from server.db import connect
 from server.service import Service
 
@@ -22,16 +23,16 @@ mcp = MCPServer(
     ),
 )
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
 _service: Service | None = None
 
 
 def load_catalog() -> Any:
-    try:
-        from catalog import api
-        return api
-    except ImportError:
-        from server import fake_catalog
-        return fake_catalog
+    # Fall back only while Runner 1's file is absent. A broken real catalog must fail loudly.
+    if (REPO_ROOT / "catalog" / "api.py").exists():
+        return importlib.import_module("catalog.api")
+    from server import fake_catalog
+    return fake_catalog
 
 
 def service() -> Service:
@@ -142,12 +143,12 @@ async def reject(request: Request) -> JSONResponse:
 
 @mcp.custom_route("/log", methods=["GET"])
 async def full_log(request: Request) -> JSONResponse:
-    return JSONResponse(audit.entries(service().conn))
+    return JSONResponse(service().full_log())
 
 
 @mcp.custom_route("/log/verify", methods=["GET"])
 async def verify_log(request: Request) -> JSONResponse:
-    return JSONResponse(audit.verify(service().conn))
+    return JSONResponse(service().verify_log())
 
 
 def build_http_app() -> Starlette:

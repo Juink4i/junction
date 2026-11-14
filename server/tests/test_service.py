@@ -345,3 +345,55 @@ def test_audit_log_needs_an_order_or_a_quote(svc):
 def test_product_details_never_include_stock_or_price_fields(svc):
     assert "available_units" not in svc.get_product("464201")
     assert svc.get_product("nope")["code"] == "product_not_found"
+
+
+# Robustness
+
+def test_parallel_tool_calls_keep_orders_and_the_log_intact(svc, tokens):
+    import threading
+    errors, results = [], []
+
+    def run(work):
+        try:
+            for _ in range(40):
+                work()
+        except Exception as e:
+            errors.append(e)
+
+    def order():
+        results.append(svc.place_order(milk(svc, 10)["quote_id"], tokens["hotel"], "Weekly milk"))
+
+    threads = [threading.Thread(target=run, args=(lambda: svc.search_products("milk"),)) for _ in range(4)]
+    threads += [threading.Thread(target=run, args=(order,)) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert len(results) == count(svc, "orders") == 80
+    assert svc.verify_log() == {"ok": True}
+
+
+def test_failed_write_does_not_leave_a_transaction_open(svc):
+    from server.db import transaction
+    with pytest.raises(Exception):
+        with transaction(svc.conn):
+            svc.conn.execute("INSERT INTO approvals (approval_id) VALUES ('apr_x')")
+    assert not svc.conn.in_transaction
+    assert svc.search_products("milk")
+
+
+def test_decided_by_must_be_text(svc, pending):
+    _, order = pending
+    assert svc.decide_approval(order["approval_id"], True, decided_by={"a": 1})["code"] == "bad_request"
+    assert svc.get_approval_status(order["approval_id"]) == {"status": "pending"}
+
+
+def test_infinite_amount_is_a_bad_amount(svc):
+    assert milk(svc, float("inf"))["code"] == "bad_amount"
+
+
+def test_calls_that_fail_early_are_logged_too(svc):
+    svc.get_audit_log()
+    svc.decide_approval("apr_missing", approve=True)
+    assert [e["action"] for e in svc.full_log()] == ["get_audit_log", "approval:not_found"]

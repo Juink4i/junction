@@ -145,3 +145,34 @@ def test_line_without_a_must_keep_tag_needs_a_human():
     decision = decide(quote(), mandate("hotel"), products, [])
     assert decision.status == "pending_approval"
     assert any("FREE_FROM_LACTOSE" in r for r in decision.reasons)
+
+
+# Splitting an order into lines must not get around a limit.
+
+def test_unusual_amount_split_over_several_lines_still_asks_the_agent():
+    three_lines = [line(units=100, covers=100.0) for _ in range(3)]
+    decision = decide(quote(*three_lines), mandate("cafe"), PRODUCTS, HISTORY)
+    assert decision.status == "needs_clarification"
+    assert any("300" in r for r in decision.reasons)
+
+
+def test_line_limit_applies_to_a_product_split_over_several_lines():
+    m = mandate("hotel")
+    m["auto_approve"]["max_order_eur"] = 5000
+    two_lines = [line(units=400, covers=400.0) for _ in range(2)]
+    decision = decide(quote(*two_lines), m, PRODUCTS, [])
+    assert decision.status == "pending_approval"
+    assert any("€1,248.00" in r and "€800.00" in r for r in decision.reasons)
+
+
+def test_blocked_allergen_codes_match_whatever_their_case():
+    pancake = line("460000", units=5, covers=10.0, unit_price=9.8, content_unit="KG")
+    m = mandate("school", blocked_allergens=["ae"])
+    assert decide(quote(pancake), m, PRODUCTS, []).status == "rejected"
+
+
+def test_missing_unknown_allergens_rule_is_treated_as_human():
+    tomato = line("460004", units=5, covers=5.0, unit_price=6.5, content_unit="KG")
+    m = mandate("school")
+    del m["hard_rules"]["unknown_allergens"]
+    assert decide(quote(tomato), m, PRODUCTS, []).status == "pending_approval"

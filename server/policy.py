@@ -20,7 +20,7 @@ def eur(amount: float) -> str:
 def _hard_stops(quote: dict, mandate: dict, products: dict) -> list[str]:
     allowed = mandate["auto_approve"].get("allowed_categories")
     rules = mandate["hard_rules"]
-    blocked = set(rules.get("blocked_allergens", []))
+    blocked = {code.upper() for code in rules.get("blocked_allergens", [])}
     reasons = []
     for line in quote["lines"]:
         product = products.get(line["product_id"])
@@ -32,8 +32,8 @@ def _hard_stops(quote: dict, mandate: dict, products: dict) -> list[str]:
                 f"{line['name']} is in category {product.category}, which the mandate does not "
                 f"allow. Allowed: {', '.join(allowed) or 'none'}."
             )
-        contains = sorted(blocked & set(product.allergens_contains))
-        may_contain = sorted(blocked & set(product.allergens_may_contain) - set(contains))
+        contains = sorted(blocked & {a.upper() for a in product.allergens_contains})
+        may_contain = sorted(blocked & {a.upper() for a in product.allergens_may_contain} - set(contains))
         if contains:
             reasons.append(f"{line['name']} contains an allergen the mandate blocks: {', '.join(contains)}.")
         if may_contain:
@@ -44,18 +44,23 @@ def _hard_stops(quote: dict, mandate: dict, products: dict) -> list[str]:
 
 
 def _unusual(quote: dict, products: dict, history: list[dict]) -> list[str]:
-    reasons = []
+    # Add up lines of the same kind first, or splitting an order would get around the check.
+    asked: dict[tuple[str, str], float] = {}
     for line in quote["lines"]:
-        category = products[line["product_id"]].category
-        past = [h["amount"] for h in history
-                if h["category"] == category and h["content_unit"] == line["content_unit"]]
+        key = (products[line["product_id"]].category, line["content_unit"])
+        asked[key] = asked.get(key, 0) + line["covers"]
+    reasons = []
+    for (category, unit), amount in asked.items():
+        past = [h["amount"] for h in history if h["category"] == category and h["content_unit"] == unit]
         if not past:
             continue
         usual = median(past)
-        if line["covers"] > UNUSUAL_FACTOR * usual:
+        if amount > UNUSUAL_FACTOR * usual:
+            names = sorted({l["name"] for l in quote["lines"]
+                            if products[l["product_id"]].category == category})
             reasons.append(
-                f"{line['covers']:g} {line['content_unit']} of {line['name']} is more than "
-                f"{UNUSUAL_FACTOR} times this buyer's usual order of {usual:g} {line['content_unit']}."
+                f"{amount:g} {unit} of {', '.join(names)} is more than {UNUSUAL_FACTOR} times "
+                f"this buyer's usual order of {usual:g} {unit}."
             )
     return reasons
 
@@ -70,11 +75,15 @@ def _needs_human(quote: dict, mandate: dict, products: dict) -> list[str]:
         reasons.append(f"The order total of {eur(quote['total_eur'])} is over the mandate's "
                        f"order limit of {eur(max_order)}.")
     max_line = limits.get("max_line_eur")
+    per_product: dict[str, float] = {}
+    for line in quote["lines"]:
+        per_product[line["name"]] = per_product.get(line["name"], 0) + line["line_total_eur"]
+    for name, total in per_product.items():
+        if max_line is not None and total > max_line:
+            reasons.append(f"{name} costs {eur(total)}, over the mandate's "
+                           f"limit of {eur(max_line)} per line.")
     for line in quote["lines"]:
         product = products[line["product_id"]]
-        if max_line is not None and line["line_total_eur"] > max_line:
-            reasons.append(f"{line['name']} costs {eur(line['line_total_eur'])}, over the mandate's "
-                           f"limit of {eur(max_line)} per line.")
         if line["cutoff_passed"]:
             reasons.append(f"The order cut-off for {line['name']} has already passed, "
                            "so on-time delivery is not certain.")
@@ -83,7 +92,7 @@ def _needs_human(quote: dict, mandate: dict, products: dict) -> list[str]:
         elif line["available_date"] > quote["need_by"]:
             reasons.append(f"{line['name']} would arrive on {line['available_date']}, "
                            f"after the need-by date {quote['need_by']}.")
-        if product.allergen_info_missing and rules.get("unknown_allergens") == "human":
+        if product.allergen_info_missing and rules.get("unknown_allergens", "human") == "human":
             reasons.append(f"{line['name']} has no allergen information. Unknown is not treated "
                            "as safe, so a person must check it.")
         missing_tags = [t for t in must_keep if t not in product.tags]

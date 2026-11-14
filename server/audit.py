@@ -5,6 +5,8 @@ import json
 import sqlite3
 from datetime import datetime
 
+from server.db import transaction
+
 GENESIS = "0" * 64
 PUBLIC_FIELDS = ("seq", "time", "actor", "action", "reason", "prev_hash", "hash")
 HASHED_FIELDS = ("seq", "time", "actor", "action", "reason", "order_id", "quote_id", "prev_hash")
@@ -17,9 +19,9 @@ def _hash(row) -> str:
 
 def append(conn: sqlite3.Connection, time: datetime, actor: str, action: str, reason: str,
            order_id: str | None = None, quote_id: str | None = None) -> None:
-    # One statement at a time would let two writers pick the same previous hash.
-    conn.execute("BEGIN IMMEDIATE")
-    try:
+    # Read the last hash and write the new row in one transaction, or two writers could
+    # chain to the same row.
+    with transaction(conn):
         last = conn.execute("SELECT seq, hash FROM log ORDER BY seq DESC LIMIT 1").fetchone()
         row = {
             "seq": last["seq"] + 1 if last else 1,
@@ -37,10 +39,6 @@ def append(conn: sqlite3.Connection, time: datetime, actor: str, action: str, re
             "VALUES (:seq, :time, :actor, :action, :reason, :order_id, :quote_id, :prev_hash, :hash)",
             row,
         )
-        conn.execute("COMMIT")
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
 
 
 def entries(conn: sqlite3.Connection, order_id: str | None = None,

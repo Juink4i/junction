@@ -171,3 +171,16 @@ async def test_log_verify_endpoint_finds_a_row_edited_by_hand():
     assert http.get("/log/verify").json() == {"ok": True}
     server_app.service().conn.execute("UPDATE log SET reason = 'edited' WHERE seq = 1")
     assert http.get("/log/verify").json() == {"ok": False, "broken_at_seq": 1}
+
+
+def test_a_broken_real_catalog_is_an_error_not_a_silent_fallback(tmp_path, monkeypatch):
+    (tmp_path / "catalog").mkdir()
+    (tmp_path / "catalog" / "api.py").write_text("import a_dependency_that_is_missing\n")
+    monkeypatch.setattr(server_app, "REPO_ROOT", tmp_path)
+    with pytest.raises(ImportError):
+        server_app.load_catalog()
+
+
+def test_fake_catalog_is_used_while_the_real_one_does_not_exist(tmp_path, monkeypatch):
+    monkeypatch.setattr(server_app, "REPO_ROOT", tmp_path)
+    assert server_app.load_catalog() is fake_catalog

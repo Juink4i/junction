@@ -1,7 +1,9 @@
 """What the six tools and the approval endpoints do. Plain code, no AI."""
 
 import dataclasses
+import functools
 import json
+import math
 import secrets
 import sqlite3
 import threading
@@ -9,6 +11,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
 from server import audit, signing
+from server.db import transaction
 from server.mandate import MandateError, verify_mandate
 from server.policy import decide, eur
 
@@ -38,13 +41,22 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{secrets.token_hex(6)}"
 
 
+def locked(method):
+    """Tools run on worker threads but share one SQLite connection, so one call at a time."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class Service:
     def __init__(self, conn: sqlite3.Connection, catalog: Any, now: Callable[[], datetime]):
         self.conn = conn
         self.catalog = catalog
         self.now = now
         self.key = signing.server_key(conn)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def _log(self, actor: str, action: str, reason: str, order_id: str | None = None,
              quote_id: str | None = None) -> None:
@@ -52,6 +64,7 @@ class Service:
 
     # Search and details: static data only.
 
+    @locked
     def search_products(self, text: str, category: str | None = None,
                         must_have_tags: list[str] | None = None, actor: str = "agent") -> list[dict]:
         tags = must_have_tags or []
@@ -61,6 +74,7 @@ class Service:
         self._log(actor, "search_products", f"Searched for \"{text}\"{filters}. {len(found)} products found.")
         return [_pick(p, SUMMARY_FIELDS) for p in found]
 
+    @locked
     def get_product(self, product_id: str, actor: str = "agent") -> dict:
         product = self.catalog.get_product(product_id)
         if product is None:
@@ -71,6 +85,7 @@ class Service:
 
     # Quotes
 
+    @locked
     def request_quote(self, lines: list[dict], need_by: date | str, actor: str = "agent") -> dict:
         result = self._build_quote(lines, need_by)
         if "quote_id" in result:
@@ -122,8 +137,8 @@ class Service:
             product = self.catalog.get_product(line["product_id"])
             if product is None:
                 return error("product_not_found", f"No product with id {line['product_id']}.")
-            if not line["amount"] > 0:
-                return error("bad_amount", f"The amount for {product.name_en} must be more than zero.")
+            if not (line["amount"] > 0 and math.isfinite(line["amount"])):
+                return error("bad_amount", f"The amount for {product.name_en} must be a number above zero.")
             try:
                 plans.append((product, self.catalog.units_needed(product.id, line["amount"], line["unit"])))
             except Exception:
@@ -181,10 +196,10 @@ class Service:
 
     # Orders
 
+    @locked
     def place_order(self, quote_id: str, mandate_token: str, rationale: str,
                     confirm_unusual: bool = False) -> dict:
-        with self._lock:
-            return self._place_order(quote_id, mandate_token, rationale, confirm_unusual)
+        return self._place_order(quote_id, mandate_token, rationale, confirm_unusual)
 
     def _refuse(self, quote_id: str, reason: str) -> dict:
         """A refusal that is not tied to an order, so it cannot use up someone's quote."""
@@ -246,29 +261,29 @@ class Service:
 
         order_id = existing["order_id"] if existing else _new_id("ord")
         approval_id = _new_id("apr") if decision.status == "pending_approval" else None
-        self.conn.execute("BEGIN IMMEDIATE")
-        self.conn.execute(
-            "INSERT INTO orders (order_id, quote_id, buyer_id, mandate_id, status, approval_id, "
-            "question, reasons_json, rationale, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT (order_id) DO UPDATE SET status = excluded.status, "
-            "approval_id = excluded.approval_id, question = excluded.question, "
-            "reasons_json = excluded.reasons_json, rationale = excluded.rationale",
-            (order_id, quote_id, buyer_id, mandate["mandate_id"], decision.status, approval_id,
-             decision.question, json.dumps(decision.reasons), rationale, now.isoformat()),
-        )
-        if approval_id:
+        with transaction(self.conn):
             self.conn.execute(
-                "INSERT INTO approvals (approval_id, order_id, status, approvers_json) "
-                "VALUES (?, ?, 'pending', ?)",
-                (approval_id, order_id, json.dumps(mandate.get("approvers", []))),
+                "INSERT INTO orders (order_id, quote_id, buyer_id, mandate_id, status, approval_id, "
+                "question, reasons_json, rationale, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (order_id) DO UPDATE SET status = excluded.status, "
+                "approval_id = excluded.approval_id, question = excluded.question, "
+                "reasons_json = excluded.reasons_json, rationale = excluded.rationale",
+                (order_id, quote_id, buyer_id, mandate["mandate_id"], decision.status, approval_id,
+                 decision.question, json.dumps(decision.reasons), rationale, now.isoformat()),
             )
-        self.conn.execute("COMMIT")
+            if approval_id:
+                self.conn.execute(
+                    "INSERT INTO approvals (approval_id, order_id, status, approvers_json) "
+                    "VALUES (?, ?, 'pending', ?)",
+                    (approval_id, order_id, json.dumps(mandate.get("approvers", []))),
+                )
         self._log("policy", f"decision:{decision.status}", " ".join(decision.reasons),
                   order_id=order_id, quote_id=quote_id)
         return self._order_result(self._order(order_id=order_id))
 
     # Approvals
 
+    @locked
     def get_approval_status(self, approval_id: str, actor: str = "agent") -> dict:
         row = self.conn.execute("SELECT * FROM approvals WHERE approval_id = ?", (approval_id,)).fetchone()
         if row is None:
@@ -280,6 +295,7 @@ class Service:
             status.update(decided_by=row["decided_by"], decided_at=row["decided_at"])
         return status
 
+    @locked
     def list_approvals(self) -> list[dict]:
         rows = self.conn.execute(
             "SELECT a.*, o.quote_id, o.reasons_json, o.rationale, o.created_at, b.name AS buyer, "
@@ -306,20 +322,24 @@ class Service:
             })
         return approvals
 
+    @locked
     def decide_approval(self, approval_id: str, approve: bool, decided_by: str | None = None) -> dict:
-        with self._lock:
-            row = self.conn.execute("SELECT * FROM approvals WHERE approval_id = ?", (approval_id,)).fetchone()
-            if row is None:
-                return error("approval_not_found", f"No approval with id {approval_id}.")
-            if row["status"] != "pending":
-                return error("already_decided", f"This approval was already {row['status']} by {row['decided_by']}.")
-            approvers = json.loads(row["approvers_json"])
-            decided_by = decided_by or (approvers[0] if approvers else "approver")
-            status = "approved" if approve else "rejected"
-            now = self.now().isoformat()
-            order = self._order(order_id=row["order_id"])
-            reason = f"{'Approved' if approve else 'Rejected'} by {decided_by}."
-            self.conn.execute("BEGIN IMMEDIATE")
+        if decided_by is not None and not isinstance(decided_by, str):
+            return error("bad_request", "decided_by must be text.")
+        row = self.conn.execute("SELECT * FROM approvals WHERE approval_id = ?", (approval_id,)).fetchone()
+        if row is None:
+            self._log(decided_by or "approver", "approval:not_found",
+                      f"Tried to decide approval {approval_id}, which does not exist.")
+            return error("approval_not_found", f"No approval with id {approval_id}.")
+        if row["status"] != "pending":
+            return error("already_decided", f"This approval was already {row['status']} by {row['decided_by']}.")
+        approvers = json.loads(row["approvers_json"])
+        decided_by = decided_by or (approvers[0] if approvers else "approver")
+        status = "approved" if approve else "rejected"
+        now = self.now().isoformat()
+        order = self._order(order_id=row["order_id"])
+        reason = f"{'Approved' if approve else 'Rejected'} by {decided_by}."
+        with transaction(self.conn):
             self.conn.execute(
                 "UPDATE approvals SET status = ?, decided_by = ?, decided_at = ? WHERE approval_id = ?",
                 (status, decided_by, now, approval_id))
@@ -327,17 +347,18 @@ class Service:
                 "UPDATE orders SET status = ?, reasons_json = ? WHERE order_id = ?",
                 ("confirmed" if approve else "rejected",
                  json.dumps(json.loads(order["reasons_json"]) + [reason]), order["order_id"]))
-            self.conn.execute("COMMIT")
-            self._log(decided_by, f"approval:{status}",
-                      f"{reason} The order is now {'confirmed' if approve else 'rejected'}.",
-                      order_id=order["order_id"], quote_id=order["quote_id"])
-            return {"status": status, "decided_by": decided_by, "decided_at": now}
+        self._log(decided_by, f"approval:{status}",
+                  f"{reason} The order is now {'confirmed' if approve else 'rejected'}.",
+                  order_id=order["order_id"], quote_id=order["quote_id"])
+        return {"status": status, "decided_by": decided_by, "decided_at": now}
 
     # Log
 
+    @locked
     def get_audit_log(self, order_id: str | None = None, quote_id: str | None = None,
                       actor: str = "agent") -> list[dict] | dict:
         if not order_id and not quote_id:
+            self._log(actor, "get_audit_log", "Asked for the log without an order or quote id.")
             return error("missing_filter", "Give an order_id or a quote_id.")
         if order_id:
             order = self._order(order_id=order_id)
@@ -345,3 +366,11 @@ class Service:
         found = audit.entries(self.conn, order_id=order_id, quote_id=quote_id)
         self._log(actor, "get_audit_log", f"Read the log for {order_id or quote_id}: {len(found)} entries.")
         return found
+
+    @locked
+    def full_log(self) -> list[dict]:
+        return audit.entries(self.conn)
+
+    @locked
+    def verify_log(self) -> dict:
+        return audit.verify(self.conn)

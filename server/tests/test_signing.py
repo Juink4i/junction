@@ -138,3 +138,56 @@ def test_unsigned_alg_none_token_is_rejected(conn):
     token = jwt.encode(DEMO_MANDATES["hotel"], None, algorithm="none", headers={"kid": "hotel"})
     with pytest.raises(MandateError):
         verify_mandate(token, conn, TODAY)
+
+
+def signed(conn, **changes):
+    """A hotel mandate with some fields changed, properly signed by a registered buyer."""
+    import copy
+    key = signing.generate_key()
+    conn.execute("INSERT INTO buyers (buyer_id, name, public_pem) VALUES ('odd', 'Odd', ?)",
+                 (signing.public_pem(key.public_key()),))
+    mandate = copy.deepcopy(DEMO_MANDATES["hotel"])
+    for path, value in changes.items():
+        target = mandate
+        *parents, leaf = path.split("__")
+        for parent in parents:
+            target = target[parent]
+        target[leaf] = value
+    return signing.sign(mandate, key, kid="odd")
+
+
+@pytest.mark.parametrize("changes", [
+    {"mandate_id": None},
+    {"buyer": ""},
+    {"agent_id": 7},
+    {"auto_approve": None},
+    {"auto_approve__max_order_eur": "1500"},
+    {"auto_approve__max_order_eur": float("nan")},
+    {"auto_approve__max_order_eur": float("inf")},
+    {"auto_approve__max_order_eur": -1},
+    {"auto_approve__max_order_eur": True},
+    {"auto_approve__max_line_eur": "800"},
+    {"auto_approve__allowed_categories": "10400"},
+    {"auto_approve__allowed_categories": [10400]},
+    {"hard_rules": None},
+    {"hard_rules__blocked_allergens": "AE"},
+    {"hard_rules__blocked_allergens": None},
+    {"hard_rules__unknown_allergens": "Human"},
+    {"hard_rules__unknown_allergens": None},
+    {"substitution": None},
+    {"substitution__must_keep": "FREE_FROM_LACTOSE"},
+    {"approvers": "boss@hotel.example"},
+])
+def test_signed_mandate_with_a_badly_shaped_field_is_rejected(conn, changes):
+    with pytest.raises(MandateError):
+        verify_mandate(signed(conn, **changes), conn, TODAY)
+
+
+def test_signed_mandate_without_optional_parts_is_accepted(conn):
+    import copy
+    key = signing.generate_key()
+    conn.execute("INSERT INTO buyers (buyer_id, name, public_pem) VALUES ('min', 'Min', ?)",
+                 (signing.public_pem(key.public_key()),))
+    mandate = copy.deepcopy(DEMO_MANDATES["hotel"])
+    del mandate["substitution"], mandate["approvers"], mandate["auto_approve"]["allowed_categories"]
+    assert verify_mandate(signing.sign(mandate, key, kid="min"), conn, TODAY)[1] == mandate
