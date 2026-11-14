@@ -78,7 +78,11 @@ def enroll(answers: dict[str, Any], buyer_id: str, agent_public_pem: str | None,
         key_file = folder / "buyer_key.pem"
         key_file.write_text(private_pem)
         key_file.chmod(0o600)
-        _register(trade_http, {"public_pem": public_pem, "mandate_token": token}, client)
+        body = {"public_pem": public_pem, "mandate_token": token}
+        code = str((answers.get("kitchen") or {}).get("enrolment_code") or "").strip()
+        if code:
+            body["enrolment_code"] = code
+        _register(trade_http, body, client)
         (folder / "mandate.jwt").write_text(token)
         (folder / "profile.json").write_text(json.dumps(built.profile, ensure_ascii=False, indent=2))
     except BaseException:

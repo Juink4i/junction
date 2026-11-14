@@ -86,6 +86,8 @@
             <input type="text" id="name" value="${esc(a.kitchen.name)}"></div>
           <div class="field"><label class="lab" for="approver">Who approves what the agent may not order alone ${pill("rule")}</label>
             <input type="text" id="approver" value="${esc(a.kitchen.approver)}"></div>
+          <div class="field"><label class="lab" for="enrolment_code">Valio Aimo enrolment code, from your webshop account ${pill("rule")}</label>
+            <input type="text" id="enrolment_code" value="${esc(a.kitchen.enrolment_code)}"></div>
         </section>
         <section class="card"><h2>Food safety</h2>
           <div class="field"><div class="lab">Allergens that must never arrive ${pill("rule")}</div>
@@ -153,6 +155,7 @@
       const a = answers;
       a.kitchen.name = $("name").value;
       a.kitchen.approver = $("approver").value;
+      a.kitchen.enrolment_code = $("enrolment_code").value;
       a.safety.blocked_allergens = checked("allergen");
       a.safety.unknown_allergens = checked("unknown")[0] ?? "human";
       a.safety.must_be = checked("must_be");

@@ -145,3 +145,13 @@ def test_each_problem_is_reported_in_plain_language(change, fragment):
 def test_buyer_id_is_a_slug_plus_four_hex_characters():
     assert re.fullmatch(r"paivakoti-aurinko-[0-9a-f]{4}", new_buyer_id("Päiväkoti Aurinko"))
     assert re.fullmatch(r"kitchen-[0-9a-f]{4}", new_buyer_id("!!!"))
+
+
+def test_the_enrolment_code_is_never_written_into_the_mandate_or_the_profile():
+    answers = template("daycare")
+    answers["kitchen"]["enrolment_code"] = "AIMO-7Q4K-2M9X"
+    result = built(answers)
+    assert "AIMO-7Q4K-2M9X" not in str(result.mandate) + str(result.profile)
+    assert any("customer account" in text for text in texts(result, "rule"))
+    answers["kitchen"]["enrolment_code"] = ""
+    assert not any("customer account" in text for text in texts(built(answers), "rule"))

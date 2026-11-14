@@ -29,9 +29,10 @@ _WORKDAYS = ["MON", "TUE", "WED", "THU", "FRI"]
 
 def _kitchen(kind: str, name: str, approver: str, *, blocked: list[str], must_be: list[str],
              categories: list[str], max_order: float, budget: tuple[str, float], days: list[str],
-             pack: str, what: str, litres: float, substitution: tuple[bool, float]) -> dict[str, Any]:
+             pack: str, what: str, litres: float, substitution: tuple[bool, float],
+             code: str = "") -> dict[str, Any]:
     return {
-        "kitchen": {"name": name, "type": kind, "approver": approver},
+        "kitchen": {"name": name, "type": kind, "approver": approver, "enrolment_code": code},
         "safety": {"blocked_allergens": blocked, "unknown_allergens": "human", "must_be": must_be},
         "money": {"allowed_categories": categories, "max_order_eur": max_order,
                   "budget": {"period": budget[0], "max_eur": budget[1]},
@@ -48,7 +49,8 @@ TEMPLATES = {
     "daycare": _kitchen("daycare", "Päiväkoti Aurinko", "kitchen.lead@aurinko.example",
                         blocked=["AP", "AN"], must_be=["FREE_FROM_LACTOSE"], categories=["10400"],
                         max_order=100, budget=("week", 150), days=["MON", "THU"], pack="small",
-                        what="lactose-free milk", litres=40, substitution=(True, 10)),
+                        what="lactose-free milk", litres=40, substitution=(True, 10),
+                        code="AIMO-7Q4K-2M9X"),
     "school": _kitchen("school", "Tapiolan koulu", "kitchen.lead@tapiolankoulu.example",
                        blocked=["AP", "AN", "AE"], must_be=[], categories=[],
                        max_order=800, budget=("month", 3000), days=["MON", "WED", "FRI"], pack="large",

@@ -61,7 +61,8 @@ def test_the_private_key_is_never_sent(tmp_path):
     enroll(answers(), "k-0000", None, "http://trade/", today=TODAY, buyers_dir=tmp_path,
            client=Recorder())
     assert seen["url"] == "http://trade/buyers"
-    assert set(seen["body"]) == {"public_pem", "mandate_token"}
+    assert set(seen["body"]) == {"public_pem", "mandate_token", "enrolment_code"}
+    assert seen["body"]["enrolment_code"] == "AIMO-7Q4K-2M9X"
     assert "PRIVATE" not in json.dumps(seen["body"])
     assert "PRIVATE KEY" in (tmp_path / "k-0000" / "buyer_key.pem").read_text()
 

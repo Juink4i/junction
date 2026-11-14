@@ -41,7 +41,8 @@ def service() -> Service:
     global _service
     if _service is None:
         scorer = None if os.environ.get("DECISIONS_API") == "off" else DecisionsScorer()
-        _service = Service(connect(), load_catalog(), lambda: datetime.now(timezone.utc), scorer)
+        _service = Service(connect(), load_catalog(), lambda: datetime.now(timezone.utc), scorer,
+                           require_enrolment_code=os.environ.get("ENROLMENT_CODES") == "on")
     return _service
 
 
@@ -132,7 +133,8 @@ async def register_buyer(request: Request) -> JSONResponse:
         body = None
     if not isinstance(body, dict):
         body = {}
-    status, result = service().register_buyer(body.get("public_pem"), body.get("mandate_token"))
+    status, result = service().register_buyer(body.get("public_pem"), body.get("mandate_token"),
+                                              body.get("enrolment_code"))
     return JSONResponse(result, status_code=status)
 
 

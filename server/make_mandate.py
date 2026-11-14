@@ -58,6 +58,18 @@ DEMO_HISTORY = {
 }
 
 
+# Simulated: customers Valio Aimo already knows. Each one sees its enrolment code in its
+# Valio Aimo webshop account, and uses it to register an agent's key.
+DEMO_CUSTOMERS = [("100234", "Päiväkoti Aurinko", "AIMO-7Q4K-2M9X")]
+
+
+def seed_demo_customers(conn: sqlite3.Connection) -> None:
+    conn.executemany(
+        "INSERT INTO customers (customer_no, name, enrolment_code) VALUES (?, ?, ?) "
+        "ON CONFLICT (customer_no) DO UPDATE SET name = excluded.name, "
+        "enrolment_code = excluded.enrolment_code", DEMO_CUSTOMERS)
+
+
 def issue_demo_mandates(conn: sqlite3.Connection) -> dict[str, str]:
     tokens = {}
     for buyer_id, mandate in DEMO_MANDATES.items():
@@ -80,7 +92,11 @@ def issue_demo_mandates(conn: sqlite3.Connection) -> dict[str, str]:
 
 if __name__ == "__main__":
     MANDATE_DIR.mkdir(exist_ok=True)
-    for buyer_id, token in issue_demo_mandates(connect()).items():
+    conn = connect()
+    for buyer_id, token in issue_demo_mandates(conn).items():
         path = MANDATE_DIR / f"{buyer_id}.jwt"
         path.write_text(token)
         print(f"{DEMO_MANDATES[buyer_id]['buyer']}: {path}")
+    seed_demo_customers(conn)
+    for customer_no, name, code in DEMO_CUSTOMERS:
+        print(f"Demo enrolment code for customer {customer_no} ({name}): {code}")

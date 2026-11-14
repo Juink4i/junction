@@ -34,6 +34,10 @@ uv run python -m web                       # 6. screens        → http://localh
 uv run python demo/run.py                  # 7. play the five demo scenes
 ```
 
+To make the trade server accept a new kitchen only with an enrolment code that Valio Aimo issued,
+start it with `ENROLMENT_CODES=on uv run python -m server`. Step 4 prints the demo code, and the
+day-care template on the onboarding page already carries it.
+
 Run steps 5, 6 and 7 in separate terminals. Step 6 opens the stage view. Open the approvals URL
 it prints on a phone on the same Wi-Fi, or scan the QR code on the stage view.
 

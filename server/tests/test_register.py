@@ -212,3 +212,51 @@ def test_an_order_waiting_for_approval_counts_and_a_rejected_one_does_not(svc):
         svc.decide_approval(approval["approval_id"], approve=False)
     after = svc.place_order(milk(svc, 60)["quote_id"], token, "Weekly milk")
     assert after["status"] == "confirmed"
+
+
+# Enrolment code: tie a registration to a customer Valio Aimo already knows
+
+from server.make_mandate import DEMO_CUSTOMERS, seed_demo_customers  # noqa: E402
+
+CUSTOMER_NO, CUSTOMER_NAME, CODE = DEMO_CUSTOMERS[0]
+
+
+@pytest.fixture
+def strict(clock):
+    svc = Service(connect(":memory:"), fake_catalog, clock, require_enrolment_code=True)
+    seed_demo_customers(svc.conn)
+    return svc
+
+
+@pytest.mark.parametrize("code", [None, "", "WRONG-CODE", 12345])
+def test_registration_without_a_known_enrolment_code_is_refused(strict, code):
+    status, body = strict.register_buyer(*signed(), enrolment_code=code)
+    assert (status, body["code"]) == (403, "enrolment_code_invalid")
+    assert buyers(strict) == []
+
+
+def test_a_known_enrolment_code_ties_the_buyer_to_the_customer(strict):
+    status, body = strict.register_buyer(*signed(), enrolment_code=CODE)
+    assert status == 201 and body["customer_no"] == CUSTOMER_NO
+    assert f"customer {CUSTOMER_NO}" in audit.entries(strict.conn)[-1]["reason"]
+
+
+def test_the_name_on_valio_aimos_record_wins_over_the_name_in_the_mandate(strict):
+    strict.register_buyer(*signed({**MANDATE, "buyer": "Hotel Chain Oy"}), enrolment_code=CODE)
+    assert strict.conn.execute("SELECT name FROM buyers").fetchone()["name"] == CUSTOMER_NAME
+
+
+def test_without_the_requirement_no_code_is_needed(svc):
+    assert svc.register_buyer(*signed())[0] == 201
+
+
+def test_post_buyers_passes_the_enrolment_code_on(strict):
+    server_app.use_service(strict)
+    try:
+        public_pem, token = signed()
+        body = {"public_pem": public_pem, "mandate_token": token}
+        client = TestClient(build_http_app())
+        assert client.post("/buyers", json=body).status_code == 403
+        assert client.post("/buyers", json={**body, "enrolment_code": CODE}).status_code == 201
+    finally:
+        server_app.use_service(None)

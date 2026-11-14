@@ -201,6 +201,9 @@ def build(answers: dict[str, Any], buyer_id: str, today: date,
     if agent_public_pem:
         say(RULE, "Orders must be signed by this kitchen's agent. A copy of this mandate alone "
                   "cannot place an order.")
+    if str(kitchen.get("enrolment_code") or "").strip():
+        say(RULE, "Valio Aimo ties this registration to your customer account through your "
+                  "enrolment code.")
     say(RULE, f"Orders that need a person go to {approver}.")
     say(PREFERENCE, "When several products fit, prefer "
                     f"{', then '.join(PRIORITIES[p] for p in money['priorities'])}.")

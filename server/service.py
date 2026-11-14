@@ -55,9 +55,10 @@ def locked(method):
 
 class Service:
     def __init__(self, conn: sqlite3.Connection, catalog: Any, now: Callable[[], datetime],
-                 unusual_scorer: Any = None):
+                 unusual_scorer: Any = None, require_enrolment_code: bool = False):
         self.conn = conn
         self.unusual_scorer = unusual_scorer
+        self.require_enrolment_code = require_enrolment_code
         self.catalog = catalog
         self.now = now
         self.key = signing.server_key(conn)
@@ -70,14 +71,27 @@ class Service:
     # Buyers
 
     @locked
-    def register_buyer(self, public_pem: Any, mandate_token: Any) -> tuple[int, dict]:
+    def register_buyer(self, public_pem: Any, mandate_token: Any,
+                       enrolment_code: Any = None) -> tuple[int, dict]:
         """A kitchen registers its signing key and its signed mandate. Returns (HTTP status, body).
 
         Plain HTTP only, never an MCP tool: an agent must not be able to register a mandate.
+        With require_enrolment_code, the registration must carry the code Valio Aimo shows that
+        customer, which ties the key to a customer Valio Aimo already knows.
         """
         if not (isinstance(public_pem, str) and public_pem
                 and isinstance(mandate_token, str) and mandate_token):
             return 400, error("bad_request", "Send public_pem and mandate_token as text.")
+        customer = None
+        if self.require_enrolment_code:
+            customer = self.conn.execute(
+                "SELECT customer_no, name FROM customers WHERE enrolment_code = ?",
+                (enrolment_code if isinstance(enrolment_code, str) else "",)).fetchone()
+            if customer is None:
+                self._log("unknown", "register_buyer:refused",
+                          "Someone tried to register a buyer without a valid Valio Aimo enrolment code.")
+                return 403, error("enrolment_code_invalid", "This enrolment code is not known to "
+                                  "Valio Aimo. Find yours in your Valio Aimo webshop account.")
         try:
             buyer_id = jwt.get_unverified_header(mandate_token).get("kid")
         except jwt.InvalidTokenError:
@@ -98,9 +112,10 @@ class Service:
             return 400, error("mandate_invalid", str(e))
 
         usual = mandate.get("usual_orders", [])
+        name = customer["name"] if customer else mandate["buyer"]
         with transaction(self.conn):
             self.conn.execute("INSERT INTO buyers (buyer_id, name, public_pem) VALUES (?, ?, ?)",
-                              (buyer_id, mandate["buyer"], public_pem))
+                              (buyer_id, name, public_pem))
             self.conn.executemany(
                 "INSERT INTO order_history (buyer_id, category, amount, content_unit, ordered_on) "
                 "VALUES (?, ?, ?, ?, ?)",
@@ -108,11 +123,17 @@ class Service:
                  for o in usual])
         declared = "; ".join(f"{o['amount']:g} {o['content_unit']} of category {o['category']} "
                              f"each {o['every']}" for o in usual)
+        known_as = (f" Its enrolment code ties it to Valio Aimo customer {customer['customer_no']} "
+                    f"({customer['name']})." if customer else "")
         self._log(mandate["buyer"], "register_buyer",
                   f"{mandate['buyer']} registered its signing key and mandate "
                   f"{mandate['mandate_id']} as buyer {buyer_id}. "
-                  + (f"Declared usual orders: {declared}." if declared else "No usual orders declared."))
-        return 201, {"buyer_id": buyer_id, "mandate_id": mandate["mandate_id"], "status": "registered"}
+                  + (f"Declared usual orders: {declared}." if declared else "No usual orders declared.")
+                  + known_as)
+        body = {"buyer_id": buyer_id, "mandate_id": mandate["mandate_id"], "status": "registered"}
+        if customer:
+            body["customer_no"] = customer["customer_no"]
+        return 201, body
 
     # Search and details: static data only.
 
