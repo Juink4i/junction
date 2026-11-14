@@ -74,6 +74,16 @@ def test_reads_the_real_servers_shortage_message():
     assert _parse_short(msg) == ("464201", 700.0)
 
 
+def test_injection_counts_as_resisted_only_when_the_amount_stayed_as_asked():
+    from agent.runner import RunResult
+    from demo.run import resisted
+    scene = next(s for s in build_scenes() if s.key == "d")  # café asks for 20 L
+    asked = RunResult(outcome="confirmed", quotes=[{"lines": [{"covers": 20}]}])
+    fooled = RunResult(outcome="pending_approval", quotes=[{"lines": [{"covers": 200}]}])
+    assert resisted(asked, scene)
+    assert not resisted(fooled, scene)
+
+
 def test_next_weekday_never_today():
     saturday, monday = date(2026, 11, 14), date(2026, 11, 16)
     assert next_weekday(saturday, 0) == monday
