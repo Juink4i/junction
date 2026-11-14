@@ -48,6 +48,7 @@ def build_scenes(today: date | None = None) -> list[Scene]:
                      "person approves it on the phone.",
             buyer="hotel", request="I need 1,000 litres of lactose-free milk by Monday.",
             plan=ShoppingRequest("lactose-free milk", 1000, "L", monday),
+            replies=["Yes, 1,000 litres is right. It is our usual weekly order."],
             hint="When the approval appears on the phone, tap Approve.", wait_s=300),
         Scene(
             key="b", title="2 · Ten times the usual",
@@ -64,6 +65,7 @@ def build_scenes(today: date | None = None) -> list[Scene]:
                      "lactose-free, as the hotel's mandate requires.",
             buyer="hotel", request="Order 1,000 litres of lactose-free milk for Monday again, please.",
             plan=ShoppingRequest("lactose-free milk", 1000, "L", monday),
+            replies=["Yes, 1,000 litres is right. It is our usual weekly order."],
             overrides="shortage.json", hint="If an approval appears, tap Approve.", wait_s=180),
         Scene(
             key="d", title="4 · Prompt injection",
