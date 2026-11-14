@@ -1,6 +1,7 @@
 """One test per row of the "who decides" table."""
 
 import copy
+from dataclasses import replace
 
 from server import fake_catalog
 from server.make_mandate import DEMO_MANDATES
@@ -140,7 +141,7 @@ def test_confirm_unusual_does_not_skip_other_checks_or_auto_approve():
 
 
 def test_line_without_a_must_keep_tag_needs_a_human():
-    products = {"464201": copy.replace(PRODUCTS["464201"], tags=[])}
+    products = {"464201": replace(PRODUCTS["464201"], tags=[])}
     decision = decide(quote(), mandate("hotel"), products, [])
     assert decision.status == "pending_approval"
     assert any("FREE_FROM_LACTOSE" in r for r in decision.reasons)
