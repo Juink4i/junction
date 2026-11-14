@@ -1,49 +1,19 @@
-import { ArrowUp, BadgeCheck, Loader2, Plus, Trash2 } from 'lucide-react'
+import { BadgeCheck, Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
+import { Chips, PriorityRanker, UsualOrders } from '@/components/answers'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, type ApiFailure } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import type { OnboardingAnswers, OnboardingOptions } from '@/lib/types'
+import { num, select } from '@/lib/utils'
 
 // Shapes from web/ /api/onboarding/* (onboarding/options.py and onboarding/build.py).
-interface Choice {
-  code: string
-  name: string
-}
-interface UsualOrder {
-  what: string
-  category: string
-  amount: number | null
-  unit: 'L' | 'KG'
-  every: string
-  /** Weekday code for a weekly order, 1-31 for a monthly one; null = any day. */
-  on?: string | number | null
-}
-interface Answers {
-  kitchen: { name: string; type: string; approver: string; enrolment_code: string }
-  safety: { blocked_allergens: string[]; unknown_allergens: string; must_be: string[] }
-  money: { allowed_categories: string[]; max_order_eur: number | null; budget: { period: string; max_eur: number } | null; priorities: string[] }
-  delivery: { days: string[]; pack_size: string }
-  usual_orders: UsualOrder[]
-  substitution?: { allowed: boolean; max_price_increase_pct: number }
-}
-interface Options {
-  kitchen_types: Choice[]
-  templates: Record<string, Answers>
-  allergens: Choice[]
-  categories: Choice[]
-  tags: Choice[]
-  weekdays: Choice[]
-  priorities: Choice[]
-  pack_sizes: Choice[]
-  periods: Choice[]
-  unknown_allergens: Choice[]
-  month_days: number[]
-}
+type Answers = OnboardingAnswers
+type Options = OnboardingOptions
 interface Preview {
   problems: string[]
   sentences: unknown[]
@@ -75,118 +45,6 @@ function Field({ label, htmlFor, children }: { label: ReactNode; htmlFor?: strin
   )
 }
 
-/** Toggle chips. `single` makes them behave like radio buttons. */
-function Chips({ items, chosen, onChange, single, tone = 'sage' }: { items: Choice[]; chosen: string[]; onChange: (v: string[]) => void; single?: boolean; tone?: 'sage' | 'stop' }) {
-  return (
-    <div className="flex flex-wrap gap-2" role={single ? 'radiogroup' : 'group'}>
-      {items.map((i) => {
-        const on = chosen.includes(i.code)
-        return (
-          <button
-            key={i.code}
-            type="button"
-            role={single ? 'radio' : undefined}
-            aria-checked={single ? on : undefined}
-            aria-pressed={single ? undefined : on}
-            onClick={() => onChange(single ? [i.code] : on ? chosen.filter((c) => c !== i.code) : [...chosen, i.code])}
-            className={cn(
-              'min-h-9 rounded-full border px-3 text-[13px] font-medium transition-colors',
-              on
-                ? tone === 'stop'
-                  ? 'border-stop/40 bg-stop-soft text-stop'
-                  : 'border-primary bg-primary text-primary-foreground'
-                : 'bg-white text-foreground hover:bg-muted',
-            )}
-          >
-            {i.name}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-const select = 'h-9 rounded-md border bg-white px-2 text-sm'
-
-/**
- * Which day a usual order comes: a calendar of day squares (1–31) for a monthly order,
- * a row of weekday squares for a weekly one. Tap the chosen square again for "any day".
- */
-function DayPicker({
-  label,
-  every,
-  value,
-  weekdays,
-  monthDays,
-  onChange,
-}: {
-  label: string
-  every: string
-  value: string | number | null
-  weekdays: Choice[]
-  monthDays: number[]
-  onChange: (v: string | number | null) => void
-}) {
-  const monthly = every === 'month'
-  const square = (on: boolean) =>
-    cn(
-      'flex aspect-square min-w-0 items-center justify-center rounded-md border text-xs font-medium tnum transition-colors sm:text-[13px]',
-      on ? 'border-go bg-go text-go-foreground shadow-[0_0_0_3px_var(--go-soft)]' : 'bg-white text-foreground hover:border-go/50 hover:bg-go-soft',
-    )
-  const said =
-    value == null ? 'Any day' : monthly ? `On day ${value} of each month` : `Every ${weekdays.find((w) => w.code === value)?.name ?? value}`
-
-  return (
-    <fieldset className="space-y-2">
-      <legend className="flex w-full items-center justify-between text-xs text-muted-foreground">
-        <span>{monthly ? 'Which day of the month' : 'Which day of the week'}</span>
-        <span className="font-medium text-emphasis">{said}</span>
-      </legend>
-      {monthly ? (
-        <div className="grid grid-cols-7 gap-1" role="radiogroup" aria-label={`${label}: day of the month`}>
-          {monthDays.map((n) => (
-            <button
-              key={n}
-              type="button"
-              role="radio"
-              aria-checked={value === n}
-              aria-label={`Day ${n}`}
-              className={square(value === n)}
-              onClick={() => onChange(value === n ? null : n)}
-            >
-              {n}
-            </button>
-          ))}
-        </div>
-      ) : (
-        <div className="grid grid-cols-7 gap-1" role="radiogroup" aria-label={`${label}: day of the week`}>
-          {weekdays.map((w) => (
-            <button
-              key={w.code}
-              type="button"
-              role="radio"
-              aria-checked={value === w.code}
-              aria-label={w.name}
-              className={square(value === w.code)}
-              onClick={() => onChange(value === w.code ? null : w.code)}
-            >
-              {w.name.slice(0, 3)}
-            </button>
-          ))}
-        </div>
-      )}
-      <button
-        type="button"
-        onClick={() => onChange(null)}
-        aria-pressed={value == null}
-        className={cn('rounded-full border px-2.5 py-0.5 text-xs font-medium', value == null ? 'border-primary bg-secondary text-secondary-foreground' : 'bg-white text-muted-foreground hover:bg-muted')}
-      >
-        Any day
-      </button>
-    </fieldset>
-  )
-}
-const num = (s: string): number | null => (s === '' ? null : Number(s))
 
 /** Sign up a new kitchen: answers → signed mandate → registered at Valio Aimo → its dashboard. */
 export default function Onboarding() {
@@ -265,9 +123,6 @@ export default function Onboarding() {
       </Shell>
     )
 
-  const names = Object.fromEntries(opts.priorities.map((p) => [p.code, p.name]))
-  const every = opts.periods.map((p) => ({ code: p.code, name: `every ${p.name}` }))
-
   return (
     <Shell>
       <form className="space-y-4" onSubmit={(e) => e.preventDefault()}>
@@ -342,29 +197,7 @@ export default function Onboarding() {
             </div>
           </Field>
           <Field label="What matters most, in order">
-            <ol className="space-y-1">
-              {a.money.priorities.map((code, i) => (
-                <li key={code} className="flex items-center gap-3 rounded-md border bg-white px-3 py-1.5">
-                  <span className="w-4 text-sm font-semibold text-muted-foreground tnum">{i + 1}</span>
-                  <span className="flex-1 text-sm">{names[code] ?? code}</span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    disabled={i === 0}
-                    aria-label={`Move ${names[code] ?? code} up`}
-                    onClick={() =>
-                      update((d) => {
-                        const p = d.money.priorities
-                        ;[p[i - 1], p[i]] = [p[i], p[i - 1]]
-                      })
-                    }
-                  >
-                    <ArrowUp /> Up
-                  </Button>
-                </li>
-              ))}
-            </ol>
+            <PriorityRanker codes={a.money.priorities} choices={opts.priorities} onChange={(v) => update((d) => void (d.money.priorities = v))} />
           </Field>
         </Section>
 
@@ -376,84 +209,7 @@ export default function Onboarding() {
             <Chips single items={opts.pack_sizes} chosen={[a.delivery.pack_size]} onChange={(v) => update((d) => void (d.delivery.pack_size = v[0]))} />
           </Field>
           <Field label="Usual orders: what, how much, how often">
-            <div className="space-y-3">
-              {a.usual_orders.map((o, i) => (
-                <div key={i} className="space-y-2 rounded-md border bg-white p-3">
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="What, for example milk"
-                      value={o.what}
-                      onChange={(e) => update((d) => void (d.usual_orders[i].what = e.target.value))}
-                      aria-label={`Usual order ${i + 1}: what`}
-                    />
-                    <select
-                      className={cn(select, 'max-w-44')}
-                      value={o.category}
-                      onChange={(e) => update((d) => void (d.usual_orders[i].category = e.target.value))}
-                      aria-label={`Usual order ${i + 1}: category`}
-                    >
-                      {opts.categories.map((c) => (
-                        <option key={c.code} value={c.code}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="flex gap-2">
-                    <Input
-                      className="w-24"
-                      type="number"
-                      min={0}
-                      value={o.amount ?? ''}
-                      onChange={(e) => update((d) => void (d.usual_orders[i].amount = num(e.target.value)))}
-                      aria-label={`Usual order ${i + 1}: amount`}
-                    />
-                    <select className={select} value={o.unit} onChange={(e) => update((d) => void (d.usual_orders[i].unit = e.target.value as 'L' | 'KG'))} aria-label="Unit">
-                      <option value="L">L</option>
-                      <option value="KG">KG</option>
-                    </select>
-                    <select
-                      className={cn(select, 'flex-1')}
-                      value={o.every}
-                      onChange={(e) =>
-                        update((d) => {
-                          d.usual_orders[i].every = e.target.value
-                          d.usual_orders[i].on = null // a weekday and a day of the month don't carry over
-                        })
-                      }
-                      aria-label="How often"
-                    >
-                      {every.map((p) => (
-                        <option key={p.code} value={p.code}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
-                    <Button type="button" variant="ghost" size="icon" aria-label={`Remove usual order ${i + 1}`} onClick={() => update((d) => void d.usual_orders.splice(i, 1))}>
-                      <Trash2 />
-                    </Button>
-                  </div>
-                  <div>
-                    <DayPicker
-                      label={`Usual order ${i + 1}`}
-                      every={o.every}
-                      value={o.on ?? null}
-                      weekdays={opts.weekdays}
-                      monthDays={opts.month_days}
-                      onChange={(v) => update((d) => void (d.usual_orders[i].on = v))}
-                    />
-                  </div>
-                </div>
-              ))}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => update((d) => void d.usual_orders.push({ what: '', category: opts.categories[0].code, amount: null, unit: 'L', every: 'week' }))}
-              >
-                <Plus /> Add a usual order
-              </Button>
-            </div>
+            <UsualOrders orders={a.usual_orders} opts={opts} onChange={(v) => update((d) => void (d.usual_orders = v))} />
           </Field>
         </Section>
       </form>

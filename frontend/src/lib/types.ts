@@ -140,7 +140,56 @@ export interface MandateChanges {
   delivery?: { days: string[] | null } | null
   approvers?: string[]
   valid_until?: string
+  /** Replaces the list. `what` is the plain name, kept in the kitchen's profile. */
+  usual_orders?: { what?: string; category: string; amount: number; content_unit: string; every: string; on?: string | number }[]
 }
+
+// Shapes from web/ /api/onboarding/options (onboarding/options.py), shared by onboarding and the mandate editor.
+export interface Choice {
+  code: string
+  name: string
+}
+export interface UsualOrder {
+  what: string
+  category: string
+  amount: number | null
+  unit: 'L' | 'KG'
+  every: string
+  /** Weekday code for a weekly order, 1-31 for a monthly one; null = any day. */
+  on?: string | number | null
+}
+export interface OnboardingAnswers {
+  kitchen: { name: string; type: string; approver: string; enrolment_code: string }
+  safety: { blocked_allergens: string[]; unknown_allergens: string; must_be: string[] }
+  money: { allowed_categories: string[]; max_order_eur: number | null; budget: { period: string; max_eur: number } | null; priorities: string[] }
+  delivery: { days: string[]; pack_size: string }
+  usual_orders: UsualOrder[]
+  substitution?: { allowed: boolean; max_price_increase_pct: number }
+}
+export interface OnboardingOptions {
+  kitchen_types: Choice[]
+  templates: Record<string, OnboardingAnswers>
+  allergens: Choice[]
+  categories: Choice[]
+  tags: Choice[]
+  weekdays: Choice[]
+  priorities: Choice[]
+  pack_sizes: Choice[]
+  periods: Choice[]
+  unknown_allergens: Choice[]
+  month_days: number[]
+}
+
+/** A kitchen's preferences from onboarding (GET /accounts/{id}/profile). Only its agent reads them. */
+export interface Profile {
+  buyer_id: string
+  name: string
+  kitchen_type: string
+  priorities: string[]
+  pack_size: string
+  usual_orders: { what: string; amount: number; unit: string; every: string; on?: string | number | null }[]
+}
+export type ProfileChanges = Partial<Pick<Profile, 'priorities' | 'pack_size'>>
 
 export interface VerifyResult {
   ok: boolean

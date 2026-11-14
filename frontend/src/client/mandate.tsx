@@ -1,21 +1,26 @@
-import { AlertTriangle, BadgeCheck, Ban, CalendarClock, Euro, Loader2, Pencil, Repeat, ShieldAlert, Tags, UserCheck, Wallet } from 'lucide-react'
+import { AlertTriangle, BadgeCheck, Ban, CalendarClock, Euro, Loader2, Package, Pencil, Repeat, ShieldAlert, Sparkles, Tags, UserCheck, Wallet } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
+import { Chips, PriorityRanker, UsualOrders } from '@/components/answers'
 import { AllergenChips, Chip, TagChips } from '@/components/common'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useAccount } from '@/lib/account'
-import { accountPath, api, type ApiFailure } from '@/lib/api'
+import { accountPath, api, usePoll, type ApiFailure } from '@/lib/api'
 import { allergenName, categoryName, eur, shortDate, tagName } from '@/lib/format'
-import type { Account, Mandate, MandateChanges } from '@/lib/types'
-import { cn } from '@/lib/utils'
+import { changesOf, draftOf, type Draft } from '@/lib/mandate-draft'
+import type { Account, Choice, Mandate, OnboardingOptions, Profile } from '@/lib/types'
 
-// Choices offered in the editor. The server validates every value again.
-const TAG_CHOICES = ['FREE_FROM_LACTOSE', 'FREE_FROM_GLUTEN', 'VEGAN', 'VEGETARIAN', 'FREE_FROM_EGGS', 'FREE_FROM_SOY', 'LOW_LACTOSE']
-const WEEKDAYS: Record<string, string> = { MON: 'Monday', TUE: 'Tuesday', WED: 'Wednesday', THU: 'Thursday', FRI: 'Friday', SAT: 'Saturday', SUN: 'Sunday' }
-const ALLERGEN_CHOICES =['AM', 'ML', 'AW', 'AE', 'AY', 'AF', 'AC', 'UM', 'AP', 'AN', 'AS', 'AU', 'BC', 'BM', 'NL']
+const nameIn = (choices: Choice[], code: string) => choices.find((c) => c.code === code)?.name ?? code
+
+/** The options list, plus any code the mandate already holds that the list lacks, so it can still be removed. */
+const withHeld = (choices: Choice[], held: string[], name: (code: string) => string): Choice[] => [
+  ...choices,
+  ...held.filter((code) => !choices.some((c) => c.code === code)).map((code) => ({ code, name: name(code) })),
+]
 
 function Rule({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
@@ -29,7 +34,8 @@ function Rule({ icon, title, children }: { icon: ReactNode; title: string; child
   )
 }
 
-function Rules({ m }: { m: Mandate }) {
+function Rules({ m, profile, opts }: { m: Mandate; profile: Profile | null; opts: OnboardingOptions }) {
+  const day = (code: string) => nameIn(opts.weekdays, code)
   return (
     <ul className="divide-y">
       <Rule icon={<Euro className="size-4" />} title="Orders on its own up to">
@@ -63,7 +69,7 @@ function Rules({ m }: { m: Mandate }) {
         {m.hard_rules.unknown_allergens === 'reject' ? 'Don’t buy it.' : m.hard_rules.unknown_allergens === 'human' ? 'Ask you first. Unknown is never treated as safe.' : 'Buy it anyway.'}
       </Rule>
       <Rule icon={<CalendarClock className="size-4" />} title="Delivery">
-        {m.delivery?.days?.length ? `Only on ${m.delivery.days.map((d) => WEEKDAYS[d] ?? d).join(', ')}. ` : 'Any day. '}
+        {m.delivery?.days?.length ? `Only on ${m.delivery.days.map(day).join(', ')}. ` : 'Any day. '}
         Must arrive by the date you need it. Another day, or a missed order cut-off, comes to you.
       </Rule>
       {m.usual_orders && m.usual_orders.length > 0 && (
@@ -71,8 +77,8 @@ function Rules({ m }: { m: Mandate }) {
           <ul className="space-y-0.5">
             {m.usual_orders.map((o, i) => (
               <li key={i}>
-                {o.amount} {o.content_unit} of {categoryName(o.category)} every {o.every}
-                {o.on != null && (o.every === 'month' ? ` on day ${o.on}` : ` on ${WEEKDAYS[String(o.on)] ?? o.on}`)}
+                {o.amount} {o.content_unit} of {profile?.usual_orders[i]?.what || categoryName(o.category)} every {o.every}
+                {o.on != null && (o.every === 'month' ? ` on day ${o.on}` : ` on ${day(String(o.on))}`)}
               </li>
             ))}
           </ul>
@@ -86,151 +92,46 @@ function Rules({ m }: { m: Mandate }) {
   )
 }
 
-interface Draft {
-  maxOrder: string
-  maxLine: string
-  anyCategory: boolean
-  categories: string
-  subsAllowed: boolean
-  subsPct: string
-  mustKeep: string[]
-  blocked: string[]
-  unknown: string
-  approvers: string
-  validUntil: string
-  budget: string
-  budgetPeriod: string
-  days: string[]
-}
-
-const draftOf = (m: Mandate): Draft => ({
-  maxOrder: String(m.auto_approve.max_order_eur ?? ''),
-  maxLine: String(m.auto_approve.max_line_eur ?? ''),
-  anyCategory: !m.auto_approve.allowed_categories?.length,
-  categories: (m.auto_approve.allowed_categories ?? []).join(', '),
-  subsAllowed: m.substitution.allowed,
-  subsPct: String(m.substitution.max_price_increase_pct),
-  mustKeep: m.substitution.must_keep,
-  blocked: m.hard_rules.blocked_allergens,
-  unknown: m.hard_rules.unknown_allergens === 'reject' ? 'reject' : 'human',
-  approvers: m.approvers.join(', '),
-  validUntil: m.valid_until,
-  budget: m.budget ? String(m.budget.max_eur) : '',
-  budgetPeriod: m.budget?.period ?? 'week',
-  days: m.delivery?.days ?? [],
-})
-
-const list = (s: string) => s.split(/[,\s]+/).map((x) => x.trim()).filter(Boolean)
-
-function changesOf(m: Mandate, d: Draft): { body: MandateChanges; summary: string[] } {
-  const body: MandateChanges = {}
-  const summary: string[] = []
-  const auto: NonNullable<MandateChanges['auto_approve']> = {}
-  if (Number(d.maxOrder) !== m.auto_approve.max_order_eur) {
-    auto.max_order_eur = Number(d.maxOrder)
-    summary.push(`Per order: ${eur(m.auto_approve.max_order_eur)} → ${eur(Number(d.maxOrder))}`)
-  }
-  if (d.maxLine !== '' && Number(d.maxLine) !== m.auto_approve.max_line_eur) {
-    auto.max_line_eur = Number(d.maxLine)
-    summary.push(`Per line: ${m.auto_approve.max_line_eur == null ? 'no limit' : eur(m.auto_approve.max_line_eur)} → ${eur(Number(d.maxLine))}`)
-  }
-  const cats = d.anyCategory ? [] : list(d.categories)
-  if (cats.join() !== (m.auto_approve.allowed_categories ?? []).join()) {
-    auto.allowed_categories = cats.length ? cats : null
-    summary.push(`Categories: ${cats.length ? cats.join(', ') : 'any'}`)
-  }
-  if (Object.keys(auto).length) body.auto_approve = auto
-
-  const subs: NonNullable<MandateChanges['substitution']> = {}
-  if (d.subsAllowed !== m.substitution.allowed) {
-    subs.allowed = d.subsAllowed
-    summary.push(`Substitutes: ${d.subsAllowed ? 'allowed' : 'not allowed'}`)
-  }
-  if (Number(d.subsPct) !== m.substitution.max_price_increase_pct) {
-    subs.max_price_increase_pct = Number(d.subsPct)
-    summary.push(`Substitutes may cost up to ${d.subsPct}% more`)
-  }
-  if (d.mustKeep.join() !== m.substitution.must_keep.join()) {
-    subs.must_keep = d.mustKeep
-    summary.push(`Substitutes must stay: ${d.mustKeep.map(tagName).join(', ') || 'nothing in particular'}`)
-  }
-  if (Object.keys(subs).length) body.substitution = subs
-
-  const hard: NonNullable<MandateChanges['hard_rules']> = {}
-  if (d.blocked.join() !== m.hard_rules.blocked_allergens.join()) {
-    hard.blocked_allergens = d.blocked
-    summary.push(`Never buy: ${d.blocked.map(allergenName).join(', ') || 'nothing blocked'}`)
-  }
-  if (d.unknown !== m.hard_rules.unknown_allergens) {
-    hard.unknown_allergens = d.unknown
-    summary.push(`Missing allergen info: ${d.unknown === 'reject' ? 'don’t buy' : 'ask first'}`)
-  }
-  if (Object.keys(hard).length) body.hard_rules = hard
-
-  const budget = d.budget === '' ? null : { period: d.budgetPeriod, max_eur: Number(d.budget) }
-  if (JSON.stringify(budget) !== JSON.stringify(m.budget ? { period: m.budget.period, max_eur: m.budget.max_eur } : null)) {
-    body.budget = budget
-    summary.push(`Budget: ${budget ? `${eur(budget.max_eur)} per ${budget.period}` : 'none'}`)
-  }
-  const order = Object.keys(WEEKDAYS)
-  const days = [...d.days].sort((x, y) => order.indexOf(x) - order.indexOf(y))
-  if (days.join() !== (m.delivery?.days ?? []).join()) {
-    body.delivery = { days }
-    summary.push(`Delivery days: ${days.length ? days.map((x) => WEEKDAYS[x]).join(', ') : 'any day'}`)
-  }
-  if (list(d.approvers).join() !== m.approvers.join()) {
-    body.approvers = list(d.approvers)
-    summary.push(`Approvers: ${list(d.approvers).join(', ')}`)
-  }
-  if (d.validUntil !== m.valid_until) {
-    body.valid_until = d.validUntil
-    summary.push(`Valid until ${shortDate(d.validUntil)}`)
-  }
-  return { body, summary }
+/** Preferences steer which fitting product the agent picks. The server never sees them. */
+function Preferences({ profile, opts }: { profile: Profile; opts: OnboardingOptions }) {
+  return (
+    <ul className="divide-y">
+      <Rule icon={<Sparkles className="size-4" />} title="When several products fit, prefer">
+        {profile.priorities.map((p) => nameIn(opts.priorities, p)).join(', then ')}.
+      </Rule>
+      <Rule icon={<Package className="size-4" />} title="Pack size">
+        Prefer {nameIn(opts.pack_sizes, profile.pack_size)}.
+      </Rule>
+    </ul>
+  )
 }
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
-    <label className="block space-y-1.5">
-      <span className="text-sm font-medium text-emphasis">{label}</span>
+    <div className="space-y-1.5">
+      <span className="block text-sm font-medium text-emphasis">{label}</span>
       {children}
       {hint && <span className="block text-xs text-muted-foreground">{hint}</span>}
-    </label>
+    </div>
   )
 }
 
-function Toggle({ on, onClick, children, tone = 'sage' }: { on: boolean; onClick: () => void; children: ReactNode; tone?: 'sage' | 'stop' }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={on}
-      className={cn(
-        'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
-        on ? (tone === 'stop' ? 'border-stop/40 bg-stop-soft text-stop' : 'border-primary bg-secondary text-secondary-foreground') : 'bg-white text-muted-foreground hover:bg-muted',
-      )}
-    >
-      {children}
-    </button>
-  )
-}
-
-function Editor({ account, m, onDone }: { account: Account; m: Mandate; onDone: () => void }) {
-  const [d, setD] = useState<Draft>(() => draftOf(m))
+function Editor({ account, m, profile, opts, onDone }: { account: Account; m: Mandate; profile: Profile | null; opts: OnboardingOptions; onDone: () => void }) {
+  const [d, setD] = useState<Draft>(() => draftOf(m, profile))
   const [confirm, setConfirm] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((x) => ({ ...x, [k]: v }))
-  const toggle = (k: 'mustKeep' | 'blocked' | 'days', v: string) =>
-    setD((x) => ({ ...x, [k]: x[k].includes(v) ? x[k].filter((y) => y !== v) : [...x[k], v] }))
-  const { body, summary } = changesOf(m, d)
+  const { body, prefs, summary } = changesOf(m, profile, d, opts)
+  const signs = Object.keys(body).length > 0
 
   const save = async () => {
     setSaving(true)
     setError(null)
     try {
-      await api(accountPath(account.buyer_id, '/mandate'), { method: 'PUT', body: JSON.stringify(body) })
-      toast.success('Signed and saved. Your agent uses the new rules from its next order.')
+      if (signs) await api(accountPath(account.buyer_id, '/mandate'), { method: 'PUT', body: JSON.stringify(body) })
+      if (Object.keys(prefs).length) await api(accountPath(account.buyer_id, '/profile'), { method: 'PUT', body: JSON.stringify(prefs) })
+      toast.success(signs ? 'Signed and saved. Your agent uses the new rules from its next order.' : 'Saved. Your agent uses the new preferences from its next order.')
       onDone()
     } catch (e) {
       setError((e as ApiFailure).message)
@@ -250,43 +151,32 @@ function Editor({ account, m, onDone }: { account: Account; m: Mandate; onDone: 
     >
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Most per order (€)" hint="Bigger orders come to you for approval.">
-          <Input type="number" min={1} step="any" inputMode="decimal" value={d.maxOrder} onChange={(e) => set('maxOrder', e.target.value)} required />
+          <Input type="number" min={1} step="any" inputMode="decimal" value={d.maxOrder} onChange={(e) => set('maxOrder', e.target.value)} required aria-label="Most per order" />
         </Field>
         <Field label="Most per line (€)" hint={m.auto_approve.max_line_eur == null ? 'Optional.' : undefined}>
-          <Input type="number" min={1} step="any" inputMode="decimal" value={d.maxLine} onChange={(e) => set('maxLine', e.target.value)} required={m.auto_approve.max_line_eur != null} />
+          <Input type="number" min={1} step="any" inputMode="decimal" value={d.maxLine} onChange={(e) => set('maxLine', e.target.value)} required={m.auto_approve.max_line_eur != null} aria-label="Most per line" />
         </Field>
       </div>
 
       <Field label="Budget (€)" hint="Leave empty for no budget. It cannot be less than the most per order.">
         <div className="flex max-w-sm gap-2">
-          <Input type="number" min={1} step="any" inputMode="decimal" value={d.budget} onChange={(e) => set('budget', e.target.value)} />
+          <Input type="number" min={1} step="any" inputMode="decimal" value={d.budget} onChange={(e) => set('budget', e.target.value)} aria-label="Budget" />
           <select className="h-9 rounded-md border bg-white px-2 text-sm" value={d.budgetPeriod} onChange={(e) => set('budgetPeriod', e.target.value)} disabled={d.budget === ''} aria-label="Budget period">
-            <option value="week">per week</option>
-            <option value="month">per month</option>
+            {opts.periods.map((p) => (
+              <option key={p.code} value={p.code}>
+                per {p.name}
+              </option>
+            ))}
           </select>
         </div>
       </Field>
 
-      <div className="space-y-1.5">
-        <span className="text-sm font-medium text-emphasis">Days you can receive goods</span>
-        <div className="flex flex-wrap gap-1.5">
-          {Object.entries(WEEKDAYS).map(([code, name]) => (
-            <Toggle key={code} on={d.days.includes(code)} onClick={() => toggle('days', code)}>
-              {name}
-            </Toggle>
-          ))}
-        </div>
-        <span className="block text-xs text-muted-foreground">None picked means any day.</span>
-      </div>
+      <Field label="Days you can receive goods" hint="None picked means any day.">
+        <Chips items={opts.weekdays} chosen={d.days} onChange={(v) => set('days', v)} />
+      </Field>
 
-      <Field label="Categories" hint="Category codes from the Valio Aimo product file, e.g. 10400 = milk and sour milk.">
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="inline-flex items-center gap-2 text-sm">
-            <input type="checkbox" className="accent-[var(--primary)]" checked={d.anyCategory} onChange={(e) => set('anyCategory', e.target.checked)} />
-            Any category
-          </label>
-          {!d.anyCategory && <Input className="max-w-xs" value={d.categories} onChange={(e) => set('categories', e.target.value)} placeholder="10400" />}
-        </div>
+      <Field label="What the agent may buy" hint="None picked means any category.">
+        <Chips items={withHeld(opts.categories, d.categories, categoryName)} chosen={d.categories} onChange={(v) => set('categories', v)} />
       </Field>
 
       <div className="space-y-3 rounded-lg border p-4">
@@ -297,52 +187,50 @@ function Editor({ account, m, onDone }: { account: Account; m: Mandate; onDone: 
         {d.subsAllowed && (
           <>
             <Field label="May cost up to (% more per litre)">
-              <Input className="max-w-32" type="number" min={0} max={100} value={d.subsPct} onChange={(e) => set('subsPct', e.target.value)} />
+              <Input className="max-w-32" type="number" min={0} max={100} value={d.subsPct} onChange={(e) => set('subsPct', e.target.value)} aria-label="Substitute price increase" />
             </Field>
-            <div className="space-y-1.5">
-              <span className="text-sm font-medium text-emphasis">A substitute must still be</span>
-              <div className="flex flex-wrap gap-1.5">
-                {TAG_CHOICES.map((t) => (
-                  <Toggle key={t} on={d.mustKeep.includes(t)} onClick={() => toggle('mustKeep', t)}>
-                    {tagName(t)}
-                  </Toggle>
-                ))}
-              </div>
-            </div>
+            <Field label="Every product must be">
+              <Chips items={withHeld(opts.tags, d.mustKeep, tagName)} chosen={d.mustKeep} onChange={(v) => set('mustKeep', v)} />
+            </Field>
           </>
         )}
       </div>
 
-      <div className="space-y-1.5">
-        <span className="text-sm font-medium text-emphasis">Never buy anything containing</span>
-        <div className="flex flex-wrap gap-1.5">
-          {ALLERGEN_CHOICES.map((a) => (
-            <Toggle key={a} tone="stop" on={d.blocked.includes(a)} onClick={() => toggle('blocked', a)}>
-              {allergenName(a)}
-            </Toggle>
-          ))}
-        </div>
-      </div>
+      <Field label="Never buy anything containing">
+        <Chips tone="stop" items={withHeld(opts.allergens, d.blocked, allergenName)} chosen={d.blocked} onChange={(v) => set('blocked', v)} />
+      </Field>
 
       <Field label="When allergen info is missing" hint="Unknown is never treated as safe.">
-        <select
-          className="h-9 w-full max-w-xs rounded-md border bg-white px-3 text-sm"
-          value={d.unknown}
-          onChange={(e) => set('unknown', e.target.value)}
-        >
-          <option value="human">Ask me first</option>
-          <option value="reject">Don’t buy it</option>
-        </select>
+        <Chips single items={opts.unknown_allergens} chosen={[d.unknown]} onChange={(v) => set('unknown', v[0])} />
+      </Field>
+
+      <Field label="Usual orders" hint="An order more than 5 times the usual is checked with you first.">
+        <UsualOrders orders={d.usual} opts={opts} named={profile != null} onChange={(v) => set('usual', v)} />
       </Field>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Who approves" hint="Email addresses, separated by commas.">
-          <Input value={d.approvers} onChange={(e) => set('approvers', e.target.value)} required />
+          <Input value={d.approvers} onChange={(e) => set('approvers', e.target.value)} required aria-label="Who approves" />
         </Field>
         <Field label="Valid until">
-          <Input type="date" value={d.validUntil} onChange={(e) => set('validUntil', e.target.value)} required />
+          <Input type="date" value={d.validUntil} onChange={(e) => set('validUntil', e.target.value)} required aria-label="Valid until" />
         </Field>
       </div>
+
+      {d.priorities && d.packSize && (
+        <div className="space-y-4 rounded-lg border p-4">
+          <div>
+            <div className="text-sm font-semibold text-emphasis">Preferences</div>
+            <div className="text-xs text-muted-foreground">These only steer which fitting product your agent picks. They are not signed.</div>
+          </div>
+          <Field label="What matters most, in order">
+            <PriorityRanker codes={d.priorities} choices={opts.priorities} onChange={(v) => set('priorities', v)} />
+          </Field>
+          <Field label="Pack size">
+            <Chips single items={opts.pack_sizes} chosen={[d.packSize]} onChange={(v) => set('packSize', v[0])} />
+          </Field>
+        </div>
+      )}
 
       {error && (
         <div className="flex items-start gap-2 rounded-lg border border-stop/25 bg-stop-soft p-3 text-sm text-stop" role="alert">
@@ -355,15 +243,19 @@ function Editor({ account, m, onDone }: { account: Account; m: Mandate; onDone: 
           Cancel
         </Button>
         <Button type="submit" className="h-10" disabled={summary.length === 0}>
-          Review and sign
+          {signs ? 'Review and sign' : 'Review and save'}
         </Button>
       </div>
 
       <Sheet open={confirm} onOpenChange={setConfirm}>
         <SheetContent side="bottom" className="mx-auto max-w-lg rounded-t-xl">
           <SheetHeader>
-            <SheetTitle>Sign the new rules?</SheetTitle>
-            <SheetDescription>Your mandate is signed again with your key. Valio Aimo’s server enforces it from your agent’s next order, and the change is written to the audit log.</SheetDescription>
+            <SheetTitle>{signs ? 'Sign the new rules?' : 'Save your preferences?'}</SheetTitle>
+            <SheetDescription>
+              {signs
+                ? 'Your mandate is signed again with your key. Valio Aimo’s server enforces it from your agent’s next order, and the change is written to the audit log.'
+                : 'Your agent reads them from its next order. Valio Aimo’s server does not see them.'}
+            </SheetDescription>
           </SheetHeader>
           <ul className="space-y-1 px-4 text-sm">
             {summary.map((s) => (
@@ -377,7 +269,7 @@ function Editor({ account, m, onDone }: { account: Account; m: Mandate; onDone: 
               Back
             </Button>
             <Button className="h-11" disabled={saving} onClick={save}>
-              {saving ? <Loader2 className="animate-spin" /> : <BadgeCheck />} Sign and save
+              {saving ? <Loader2 className="animate-spin" /> : <BadgeCheck />} {signs ? 'Sign and save' : 'Save'}
             </Button>
           </SheetFooter>
         </SheetContent>
@@ -389,8 +281,12 @@ function Editor({ account, m, onDone }: { account: Account; m: Mandate; onDone: 
 export default function ClientMandate() {
   const { account, reload } = useAccount()
   const [editing, setEditing] = useState(false)
+  const { data: opts } = usePoll<OnboardingOptions>('/onboarding/options')
+  // A 404 (a demo buyer, who never onboarded) leaves the profile null.
+  const { data: profile, loading, reload: reloadProfile } = usePoll<Profile>(account ? accountPath(account.buyer_id, '/profile') : null)
   const m = account?.mandate
   if (!account) return null
+  const ready = opts != null && !loading
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -399,7 +295,7 @@ export default function ClientMandate() {
           <h1 className="text-[22px] font-semibold tracking-tight text-emphasis">Your agent’s rules</h1>
           <p className="text-sm text-muted-foreground">What your AI agent may buy on its own. Valio Aimo’s server enforces these; the agent cannot change them.</p>
         </div>
-        {m && !editing && (
+        {m && ready && !editing && (
           <Button variant="outline" onClick={() => setEditing(true)}>
             <Pencil /> Edit
           </Button>
@@ -421,19 +317,31 @@ export default function ClientMandate() {
         </div>
         {!m ? (
           <p className="text-sm text-muted-foreground">No mandate on file.</p>
+        ) : !ready ? (
+          <Skeleton className="h-80 w-full rounded-lg" />
         ) : editing ? (
           <Editor
             account={account}
             m={m}
+            profile={profile}
+            opts={opts}
             onDone={() => {
               setEditing(false)
               reload()
+              reloadProfile()
             }}
           />
         ) : (
-          <Rules m={m} />
+          <Rules m={m} profile={profile} opts={opts} />
         )}
       </Card>
+      {profile && opts && !editing && (
+        <Card className="mt-4 gap-0 p-5">
+          <h2 className="text-base font-semibold text-emphasis">Your preferences</h2>
+          <p className="mb-1 text-sm text-muted-foreground">Only your agent reads these, to choose between products that already fit the rules.</p>
+          <Preferences profile={profile} opts={opts} />
+        </Card>
+      )}
     </div>
   )
 }
