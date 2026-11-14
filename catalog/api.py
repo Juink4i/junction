@@ -9,11 +9,12 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from datetime import date
 from pathlib import Path
 from typing import Literal
 
 from catalog.load import DB_PATH
-from catalog.models import Product, ProductSummary
+from catalog.models import Offer, Product, ProductSummary
 from catalog.overrides import Overrides
 
 AllergenStatus = Literal["contains", "may_contain", "free_from", "unknown"]
@@ -104,6 +105,23 @@ def search_products(text: str, category: str | None = None,
 def get_product(product_id: str) -> Product | None:
     r = _row(product_id)
     return _product(r) if r else None
+
+
+def _client():
+    if _state.client is None:
+        from catalog.valio_client import ValioClient
+        _state.client = ValioClient()
+    return _state.client
+
+
+def price_and_availability(product_ids: list[str], delivery_date: date) -> dict[str, Offer]:
+    """Live price and availability for a shortlist. Products without a price are left out.
+
+    Calls POST /api/price and POST /api/availability once each for ids not cached in the last
+    5 minutes. Demo overrides are applied on top.
+    """
+    offers = _client().offers(product_ids, delivery_date)
+    return {pid: _state.overrides.offer(o, pid) for pid, o in offers.items()}
 
 
 def allergen_status(product_id: str, allergen_code: str) -> AllergenStatus:
