@@ -411,12 +411,12 @@ class Service:
         return {**body, "signature": signature}
 
     def _forecast(self, quote: dict, need_by: date, buyer: Buyer, products: dict,
-                  history: list[dict], now: datetime):
+                  history: list[dict], now: datetime, set_id: str | None = None):
         """What Policy would decide for this quote now. Nothing is saved, and the Decisions
         API is not asked. The decision at order time is the one that counts."""
         return decide({**quote, "need_by": need_by.isoformat()}, buyer.mandate, products, history,
-                      None, self._spent_in_period(buyer.buyer_id, buyer.mandate, now, quote["quote_id"]),
-                      now)
+                      None, self._spent_in_period(buyer.buyer_id, buyer.mandate, now, quote["quote_id"],
+                                                         set_id), now)
 
     @locked
     def request_quote(self, buyer: Buyer, product_ids: list[str] | None, amount: float | None,
@@ -552,41 +552,29 @@ class Service:
         return [dict(row) for row in self.conn.execute(
             "SELECT category, amount, content_unit FROM order_history WHERE buyer_id = ?", (buyer_id,))]
 
-    def _one_live_order(self, set_id: str, quote_id: str, actor: str, now: datetime) -> str | None:
-        """Offering alternatives must not lead to buying twice. Returns a refusal, or None.
-
-        An order from the same request that is waiting for approval is withdrawn. One that is
-        already confirmed refuses the new order.
-        """
-        siblings = self.conn.execute(
+    def _live_siblings(self, set_id: str, quote_id: str) -> list[sqlite3.Row]:
+        """Orders from the same request, other than this quote's, that are confirmed or waiting."""
+        return self.conn.execute(
             "SELECT o.* FROM orders o JOIN quotes q USING (quote_id) WHERE q.set_id = ? "
             "AND o.quote_id != ? AND o.status IN ('confirmed', 'pending_approval')",
             (set_id, quote_id)).fetchall()
-        for order in siblings:
-            if order["status"] == "confirmed":
-                return (f"This request was already ordered as {order['order_id']}. "
-                        "Request a new quote to order again.")
-        for order in siblings:
-            reasons = json.loads(order["reasons_json"]) + [WITHDRAWN]
-            with transaction(self.conn):
-                self.conn.execute(
-                    "UPDATE orders SET status = 'rejected', reasons_json = ?, alternatives_json = NULL "
-                    "WHERE order_id = ?", (json.dumps(reasons), order["order_id"]))
-                self.conn.execute(
-                    "UPDATE approvals SET status = 'rejected', decided_by = ?, decided_at = ? "
-                    "WHERE order_id = ? AND status = 'pending'",
-                    (actor, now.isoformat(), order["order_id"]))
-            self._log(actor, "order:withdrawn",
-                      f"{WITHDRAWN} Order {order['order_id']} no longer waits for approval.",
-                      order_id=order["order_id"], quote_id=order["quote_id"])
-        return None
+
+    def _withdraw(self, order: sqlite3.Row, actor: str, now: datetime) -> None:
+        """Marks a waiting order rejected and closes its approval; it never commits or logs."""
+        reasons = json.loads(order["reasons_json"]) + [WITHDRAWN]
+        self.conn.execute(
+            "UPDATE orders SET status = 'rejected', reasons_json = ?, alternatives_json = NULL "
+            "WHERE order_id = ?", (json.dumps(reasons), order["order_id"]))
+        self.conn.execute(
+            "UPDATE approvals SET status = 'rejected', decided_by = ?, decided_at = ? "
+            "WHERE order_id = ? AND status = 'pending'",
+            (actor, now.isoformat(), order["order_id"]))
 
     def _alternatives(self, set_id: str, quote_id: str, buyer: Buyer, history: list[dict],
                       now: datetime) -> list[dict]:
         """Other options from the same request that Policy would confirm on their own, best first.
 
-        Called before the order is saved, so the order they would replace is not counted
-        against their budget.
+        Orders from this request are not counted against their budget: they would replace them.
         """
         found = []
         rows = self.conn.execute(
@@ -603,7 +591,7 @@ class Service:
             products = {l["product_id"]: self.catalog.get_product(l["product_id"])
                         for l in quote["lines"]}
             products = {pid: p for pid, p in products.items() if p is not None}
-            if self._forecast(quote, need_by, buyer, products, history, now).status != "confirmed":
+            if self._forecast(quote, need_by, buyer, products, history, now, set_id).status != "confirmed":
                 continue
             summary = " + ".join(f"{l['units']:,} × {l['sales_unit']} {l['name']} "
                                  f"({l['covers']:g} {l['content_unit']})" for l in quote["lines"])
@@ -654,24 +642,31 @@ class Service:
         except signing.QuoteError as e:
             return self._refuse(quote_id, str(e))
         set_id = quote_row["set_id"]
+        waiting: list[sqlite3.Row] = []
         if set_id:
-            problem = self._one_live_order(set_id, quote_id, actor, now)
-            if problem:
-                return self._refuse(quote_id, problem)
+            siblings = self._live_siblings(set_id, quote_id)
+            for order in siblings:
+                if order["status"] == "confirmed":
+                    return self._refuse(quote_id, f"This request was already ordered as "
+                                                  f"{order['order_id']}. Request a new quote to order again.")
+            waiting = siblings
 
         products = {l["product_id"]: self.catalog.get_product(l["product_id"]) for l in quote["lines"]}
         products = {pid: p for pid, p in products.items() if p is not None}
         history = self._history(buyer_id)
         ai_unusual = self._ai_unusual(mandate["buyer"], history, quote, products, quote_id)
         decision = decide({**quote, "need_by": need_by.isoformat()}, mandate, products, history,
-                          ai_unusual, self._spent_in_period(buyer_id, mandate, now, quote_id), now)
+                          ai_unusual, self._spent_in_period(buyer_id, mandate, now, quote_id, set_id), now)
         alternatives = []
         if decision.status != "confirmed" and set_id:
             alternatives = self._alternatives(set_id, quote_id, Buyer(buyer_id, mandate), history, now)
 
         order_id = _new_id("ord")
         approval_id = _new_id("apr") if decision.status == "pending_approval" else None
+        withdrawn = waiting if decision.status != "rejected" else []
         with transaction(self.conn):
+            for order in withdrawn:
+                self._withdraw(order, actor, now)
             self.conn.execute(
                 "INSERT INTO orders (order_id, quote_id, buyer_id, mandate_id, status, approval_id, "
                 "reasons_json, rationale, created_at, alternatives_json) "
@@ -686,6 +681,10 @@ class Service:
                     "VALUES (?, ?, 'pending', ?)",
                     (approval_id, order_id, json.dumps(mandate.get("approvers", []))),
                 )
+        for order in withdrawn:
+            self._log(actor, "order:withdrawn",
+                      f"{WITHDRAWN} Order {order['order_id']} no longer waits for approval.",
+                      order_id=order["order_id"], quote_id=order["quote_id"])
         self._log("policy", f"decision:{decision.status}", " ".join(decision.reasons),
                   order_id=order_id, quote_id=quote_id)
         if alternatives:
@@ -695,16 +694,21 @@ class Service:
                       order_id=order_id, quote_id=quote_id)
         return self._order_result(self._order(order_id=order_id))
 
-    def _spent_in_period(self, buyer_id: str, mandate: dict, now: datetime, quote_id: str) -> float:
-        """What this buyer's other live orders in the current budget period add up to, in euros."""
+    def _spent_in_period(self, buyer_id: str, mandate: dict, now: datetime, quote_id: str,
+                         set_id: str | None = None) -> float:
+        """What this buyer's other live orders in the current budget period add up to, in euros.
+
+        Orders whose quote belongs to set_id are left out: the new order would replace them.
+        """
         budget = mandate.get("budget")
         if not budget:
             return 0.0
         rows = self.conn.execute(
             "SELECT q.body_json FROM orders o JOIN quotes q USING (quote_id) "
             "WHERE o.buyer_id = ? AND o.quote_id != ? AND o.created_at >= ? "
-            "AND o.status IN ('confirmed', 'pending_approval')",
-            (buyer_id, quote_id, period_start(budget["period"], now).isoformat()))
+            "AND o.status IN ('confirmed', 'pending_approval') "
+            "AND (? IS NULL OR q.set_id IS NULL OR q.set_id != ?)",
+            (buyer_id, quote_id, period_start(budget["period"], now).isoformat(), set_id, set_id))
         return round(sum(json.loads(row["body_json"])["total_eur"] for row in rows), 2)
 
     def _ai_unusual(self, buyer: str, history: list[dict], quote: dict, products: dict,

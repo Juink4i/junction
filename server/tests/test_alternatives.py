@@ -102,6 +102,53 @@ def test_a_request_that_is_already_confirmed_cannot_be_ordered_again(svc, token,
     assert count(svc, "orders") == 1
 
 
+def test_a_replacement_that_policy_rejects_withdraws_nothing(svc, token, options):
+    first = place(svc, token, options[0])
+    svc.catalog.product_changes["464179"] = {"category": "99999"}  # the mandate allows only 10400
+    second = place(svc, token, options[1])
+    assert second["status"] == "rejected"
+    assert svc.get_approval_status(first["approval_id"]) == {"status": "pending"}
+    assert len(svc.list_approvals()) == 1
+    assert place(svc, token, options[0], "Checking") == first
+    assert not any(e["action"] == "order:withdrawn" for e in svc.full_log())
+
+
+def test_a_failure_while_deciding_withdraws_nothing(svc, token, options, monkeypatch):
+    first = place(svc, token, options[0])
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(svc, "_alternatives", broken)
+    with pytest.raises(RuntimeError):
+        place(svc, token, options[3])
+    assert svc.get_approval_status(first["approval_id"]) == {"status": "pending"}
+    assert count(svc, "orders") == 1
+
+
+def test_a_replacement_that_needs_a_person_withdraws_and_is_not_judged_against_either_order(
+        svc, token, options):
+    first = place(svc, token, options[0])
+    second = place(svc, token, options[3])
+    assert second["status"] == "pending_approval"
+    assert [a["quote_id"] for a in second["alternatives"]] == [
+        options[1]["quote"]["quote_id"], options[2]["quote"]["quote_id"]]
+    withdrawn = place(svc, token, options[0], "Checking")
+    assert (withdrawn["status"], withdrawn["order_id"]) == ("rejected", first["order_id"])
+    assert withdrawn["reasons"][-1].startswith("Withdrawn")
+    approvals = svc.list_approvals()
+    assert [a["approval_id"] for a in approvals] == [second["approval_id"]]
+
+
+def test_the_log_shows_the_withdrawal_before_the_decision(svc, token, options):
+    place(svc, token, options[0])
+    place(svc, token, options[3])
+    actions = [e["action"] for e in svc.full_log()]
+    last_decision = len(actions) - 1 - actions[::-1].index("decision:pending_approval")
+    assert "order:withdrawn" in actions[:last_decision]
+    assert actions.index("order:withdrawn") < last_decision
+
+
 def test_an_approved_order_no_longer_lists_alternatives(svc, token, options):
     placed = place(svc, token, options[0])
     svc.decide_approval(placed["approval_id"], approve=True)
