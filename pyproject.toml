@@ -1,0 +1,17 @@
+[project]
+name = "junction-valio-aimo"
+version = "0.1.0"
+description = "Trusted Trade Agents: an MCP front door for Valio Aimo"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "mcp>=1.12",
+    "pyjwt[crypto]>=2.9",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
