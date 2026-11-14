@@ -59,6 +59,24 @@ Tests: `uv run pytest`
 | `/log` | Every search, quote, decision and approval in plain language. **Verify log** recomputes the hash chain: green if intact, red at the first edited row. |
 | `/chat` | What the agent says and does, live. AI messages, MCP tool calls and the server's decisions look different on purpose. |
 
+### Frontend (`/app/`)
+
+A React + shadcn/ui app in `frontend/`, served by `web/` at **http://localhost:8080/app/**. Everything is **per account**: pick Hotel, Café or School at the top (or tick *Follow demo*), and every page shows only that account's orders, approvals, log rows and agent events. `web/` enforces this server-side (`/api/accounts/{buyer_id}/...`, read-only from `data/state.db`); mandate tokens never reach the browser.
+
+| Page | What it shows |
+|---|---|
+| Overview | The live run as a pipeline: AI agent → AI agent → **plain code** → person, the agent feed, the current quote and the phone approvals |
+| Orders & delivery | Every order with its outcome; each opens a **delivery progress** page (green dots joined by a line: quoted → rules checked → approval → placed → delivery date), with delivery reliability and CO₂ from Valio Aimo's data files |
+| Approvals, Audit log, Mandate | Phone approvals with a reject confirmation; the log grouped by order with **Verify log**; the signed rules in plain words |
+
+```
+cd frontend
+npm install
+npm run build        # once; then web/ serves it at /app/ (the demo needs no Node)
+npm run dev          # or: live-reload on :5173, /api proxied to :8080 (API_TARGET=... to change)
+npm test             # unit tests for the step and unit formatting logic
+```
+
 ## The demo (2 minutes)
 
 | Scene | What happens | Shows |

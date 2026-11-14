@@ -1,0 +1,322 @@
+"""Per-account views: each buyer sees only its own orders, approvals, log rows and events."""
+
+import json
+from datetime import date, datetime, timedelta, timezone
+
+import httpx
+import pytest
+from starlette.testclient import TestClient
+
+from server import fake_catalog
+from server.db import connect
+from server.make_mandate import issue_demo_mandates
+from server.service import Service
+from web.app import create_app
+
+NEED_BY = (date.today() + timedelta(days=3)).isoformat()
+
+
+class Trade:
+    """Stands in for the trade server's HTTP endpoints, deciding approvals in the temp DB."""
+
+    def __init__(self, svc: Service):
+        self.svc = svc
+        self.calls: list[tuple[str, str, bytes]] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.calls.append((request.method, request.url.path, request.content))
+        parts = request.url.path.strip("/").split("/")
+        if request.method == "POST" and len(parts) == 3 and parts[0] == "approvals":
+            body = json.loads(request.content) if request.content else {}
+            result = self.svc.decide_approval(parts[1], parts[2] == "approve", body.get("decided_by"))
+            return httpx.Response(404 if "code" in result else 200, json=result)
+        return httpx.Response(404, json={"code": "not_found"})
+
+
+@pytest.fixture
+def world(tmp_path):
+    conn = connect(tmp_path / "state.db")
+    tokens = issue_demo_mandates(conn)
+    mandates = tmp_path / "mandates"
+    mandates.mkdir()
+    for buyer_id, token in tokens.items():
+        (mandates / f"{buyer_id}.jwt").write_text(token)
+    svc = Service(conn, fake_catalog, lambda: datetime.now(timezone.utc))
+
+    def order(buyer: str, product_id: str, litres: float) -> dict:
+        q = svc.request_quote([{"product_id": product_id, "amount": litres, "unit": "L"}], NEED_BY)
+        return {**svc.place_order(q["quote_id"], tokens[buyer], f"test {buyer}"), "quote_id": q["quote_id"]}
+
+    hotel = order("hotel", "464201", 1000)        # €1,560: over the hotel's €800 line limit
+    cafe_ok = order("cafe", "464201", 20)         # small and usual: confirmed
+    cafe_wait = order("cafe", "463038", 20)       # cut-off passed: a person must approve
+    assert hotel["status"] == "pending_approval"
+    assert cafe_ok["status"] == "confirmed"
+    assert cafe_wait["status"] == "pending_approval"
+
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html>SPA shell</html>")
+    (dist / "assets" / "app.js").write_text("console.log('app')")
+
+    class World:
+        pass
+
+    w = World()
+    w.svc, w.tokens, w.hotel, w.cafe_ok, w.cafe_wait = svc, tokens, hotel, cafe_ok, cafe_wait
+    w.state_db, w.mandates, w.dist = tmp_path / "state.db", mandates, dist
+    w.trade = Trade(svc)
+    yield w
+    conn.close()
+
+
+@pytest.fixture
+def client(world):
+    app = create_app(trade_http="http://trade.test", state_db=world.state_db,
+                     mandate_dir=world.mandates, catalog=fake_catalog, frontend_dist=world.dist)
+    with TestClient(app) as c:
+        real = c.app.state.http
+        c.app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(world.trade))
+        yield c
+        c.app.state.http = real
+
+
+def test_accounts_list_mandates_without_tokens(client, world):
+    res = client.get("/api/accounts")
+    assert res.status_code == 200
+    accounts = res.json()
+    assert [a["buyer_id"] for a in accounts] == ["hotel", "cafe", "school"]
+    hotel = accounts[0]
+    assert hotel["name"] == "Hotel Chain Oy / Helsinki Central"
+    assert hotel["mandate"]["auto_approve"]["max_line_eur"] == 800
+    assert all(a["mandate_verified"] is True and a["mandate_problem"] is None for a in accounts)
+    for token in world.tokens.values():
+        assert token not in res.text
+        assert token.split(".")[2] not in res.text  # not even the signature
+
+
+def test_account_with_missing_or_bad_mandate(client, world):
+    (world.mandates / "school.jwt").unlink()
+    (world.mandates / "cafe.jwt").write_text(world.tokens["hotel"][:-4] + "AAAA")
+    accounts = {a["buyer_id"]: a for a in client.get("/api/accounts").json()}
+    assert accounts["school"]["mandate"] is None
+    assert accounts["school"]["mandate_verified"] is False
+    assert accounts["cafe"]["mandate_verified"] is False
+    assert "signature" in accounts["cafe"]["mandate_problem"]
+
+
+def test_unknown_account_is_404(client):
+    for path in ("/api/accounts/nobody/orders", "/api/accounts/nobody/approvals",
+                 "/api/accounts/nobody/log", "/api/accounts/nobody/orders/ord_x"):
+        res = client.get(path)
+        assert res.status_code == 404
+        assert res.json()["code"] == "account_not_found"
+
+
+def test_orders_are_per_account(client, world):
+    hotel = client.get("/api/accounts/hotel/orders").json()
+    assert [o["order_id"] for o in hotel] == [world.hotel["order_id"]]
+    order = hotel[0]
+    assert order["status"] == "pending_approval"
+    assert order["quote_id"] == world.hotel["quote_id"]
+    assert order["rationale"] == "test hotel"
+    assert order["reasons"] and isinstance(order["reasons"], list)
+    assert order["question"] is None
+    assert order["total_eur"] == 1560.0
+    assert order["total_with_tax_eur"] > order["total_eur"]
+    assert order["lines"][0]["product_id"] == "464201"
+    assert order["delivery_date"] == NEED_BY
+    assert order["expires_at"]
+    assert order["approval"]["approval_id"] == world.hotel["approval_id"]
+    assert order["approval"]["status"] == "pending"
+    assert order["approval"]["approvers"] == ["procurement.manager@hotel.example"]
+    assert order["approval"]["decided_by"] is None
+
+    cafe = client.get("/api/accounts/cafe/orders").json()
+    assert [o["order_id"] for o in cafe] == [world.cafe_wait["order_id"], world.cafe_ok["order_id"]]
+    assert cafe[1]["approval"] is None
+    assert client.get("/api/accounts/school/orders").json() == []
+
+
+def test_one_order_with_log_and_product_details(client, world):
+    res = client.get(f"/api/accounts/hotel/orders/{world.hotel['order_id']}")
+    assert res.status_code == 200
+    order = res.json()
+    assert order["order_id"] == world.hotel["order_id"]
+    product = order["lines"][0]["product"]
+    assert product["category"] == "10400"
+    assert product["tags"] == ["FREE_FROM_LACTOSE"]
+    assert product["allergens_contains"] == ["BM"]
+    assert product["allergen_info_missing"] is False
+    assert "delivery_reliability" in product and "carbon_kg_per_kg" in product
+    actions = [row["action"] for row in order["log"]]
+    assert "request_quote" in actions and "decision:pending_approval" in actions
+    seqs = [row["seq"] for row in order["log"]]
+    assert seqs == sorted(seqs)
+    assert set(order["log"][0]) == {"seq", "time", "actor", "action", "reason", "prev_hash", "hash"}
+
+
+def test_missing_product_gives_null_details(world):
+    class Broken:
+        def get_product(self, product_id):
+            raise RuntimeError("catalog down")
+
+    app = create_app(trade_http="http://trade.test", state_db=world.state_db,
+                     mandate_dir=world.mandates, catalog=Broken(), frontend_dist=world.dist)
+    with TestClient(app) as c:
+        order = c.get(f"/api/accounts/hotel/orders/{world.hotel['order_id']}").json()
+    assert order["lines"][0]["product"] is None
+
+
+def test_another_accounts_order_looks_like_it_does_not_exist(client, world):
+    res = client.get(f"/api/accounts/hotel/orders/{world.cafe_ok['order_id']}")
+    assert res.status_code == 404
+    assert res.json()["code"] == "order_not_found"
+    missing = client.get("/api/accounts/hotel/orders/ord_nope")
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "order_not_found"
+    assert set(res.json()) == {"code", "message", "retryable"}
+    assert res.json() == missing.json()  # indistinguishable from an order that does not exist
+
+
+def test_approvals_are_per_account(client, world):
+    hotel = client.get("/api/accounts/hotel/approvals").json()
+    assert [a["approval_id"] for a in hotel] == [world.hotel["approval_id"]]
+    assert set(hotel[0]) == {"approval_id", "order_id", "quote_id", "status", "buyer", "approvers",
+                             "reasons", "agent_rationale", "lines", "total_eur", "total_with_tax_eur",
+                             "created_at"}
+    assert hotel[0]["buyer"] == "Hotel Chain Oy / Helsinki Central"
+    cafe = client.get("/api/accounts/cafe/approvals").json()
+    assert [a["approval_id"] for a in cafe] == [world.cafe_wait["approval_id"]]
+
+
+def test_cannot_decide_another_accounts_approval(client, world):
+    for action in ("approve", "reject"):
+        res = client.post(f"/api/accounts/hotel/approvals/{world.cafe_wait['approval_id']}/{action}")
+        assert res.status_code == 404
+        assert res.json()["code"] == "approval_not_found"
+    missing = client.post("/api/accounts/hotel/approvals/apr_nope/approve")
+    assert missing.status_code == 404 and missing.json() == res.json()
+    res = client.post("/api/accounts/nobody/approvals/apr_x/approve")
+    assert res.json()["code"] == "account_not_found"
+    assert world.trade.calls == []
+    assert [a["approval_id"] for a in client.get("/api/accounts/cafe/approvals").json()] == \
+        [world.cafe_wait["approval_id"]]
+
+
+def test_bad_action_is_404(client, world):
+    res = client.post(f"/api/accounts/hotel/approvals/{world.hotel['approval_id']}/delete")
+    assert res.status_code == 404
+    assert res.json()["code"] == "bad_action"
+    assert world.trade.calls == []
+
+
+def test_own_approval_is_forwarded(client, world):
+    approval_id = world.hotel["approval_id"]
+    res = client.post(f"/api/accounts/hotel/approvals/{approval_id}/approve",
+                      json={"decided_by": "chef@hotel.example"})
+    assert res.status_code == 200
+    assert res.json()["status"] == "approved"
+    assert res.json()["decided_by"] == "chef@hotel.example"
+    method, path, body = world.trade.calls[0]
+    assert (method, path) == ("POST", f"/approvals/{approval_id}/approve")
+    assert json.loads(body) == {"decided_by": "chef@hotel.example"}
+
+    assert client.get("/api/accounts/hotel/approvals").json() == []
+    order = client.get("/api/accounts/hotel/orders").json()[0]
+    assert order["status"] == "confirmed"
+    assert order["approval"]["status"] == "approved"
+    assert order["approval"]["decided_by"] == "chef@hotel.example"
+    assert order["approval"]["decided_at"]
+
+
+def test_log_is_per_account(client, world):
+    hotel = client.get("/api/accounts/hotel/log").json()
+    assert hotel
+    assert {r["order_id"] for r in hotel if r["order_id"]} == {world.hotel["order_id"]}
+    assert {r["quote_id"] for r in hotel} == {world.hotel["quote_id"]}
+    assert set(hotel[0]) == {"seq", "time", "actor", "action", "reason", "prev_hash", "hash",
+                             "order_id", "quote_id"}
+    assert [r["seq"] for r in hotel] == sorted(r["seq"] for r in hotel)
+
+    cafe = client.get("/api/accounts/cafe/log").json()
+    cafe_quotes = {world.cafe_ok["quote_id"], world.cafe_wait["quote_id"]}
+    assert {r["quote_id"] for r in cafe} == cafe_quotes
+    assert not {r["seq"] for r in cafe} & {r["seq"] for r in hotel}
+    assert client.get("/api/accounts/school/log").json() == []
+
+
+def test_new_writes_show_up(client, world):
+    q = world.svc.request_quote([{"product_id": "464201", "amount": 200, "unit": "L"}], NEED_BY)
+    r = world.svc.place_order(q["quote_id"], world.tokens["school"], "school milk")
+    orders = client.get("/api/accounts/school/orders").json()
+    assert [o["order_id"] for o in orders] == [r["order_id"]]
+
+
+def test_events_filter_by_buyer(client):
+    client.post("/api/events", json={"kind": "agent", "text": "hotel says", "buyer": "hotel"})
+    client.post("/api/events", json={"kind": "agent", "text": "cafe says", "buyer": "cafe"})
+    client.post("/api/events", json={"kind": "note", "text": "no buyer"})
+    assert [e["text"] for e in client.get("/api/events?buyer=hotel").json()] == ["hotel says"]
+    assert len(client.get("/api/events").json()) == 3
+
+    with client.stream("GET", "/api/events/stream?replay_only=1&buyer=cafe") as stream:
+        body = "".join(stream.iter_text())
+    frames = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
+    assert [f["text"] for f in frames] == ["cafe says"]
+
+
+def test_live_stream_filter_lets_clear_through():
+    from web.app import buyer_filter
+    keep = buyer_filter("hotel")
+    assert keep({"kind": "clear"})
+    assert keep({"kind": "agent", "buyer": "hotel"})
+    assert not keep({"kind": "agent", "buyer": "cafe"})
+    assert not keep({"kind": "agent"})
+    assert buyer_filter(None)({"kind": "agent", "buyer": "cafe"})
+
+
+def test_info_reports_active_buyer(client):
+    assert client.get("/api/info").json()["active_buyer"] is None
+    client.post("/api/events", json={"kind": "run_start", "buyer": "hotel"})
+    assert client.get("/api/info").json()["active_buyer"] == "hotel"
+    client.post("/api/events", json={"kind": "agent", "buyer": "cafe", "text": "x"})
+    assert client.get("/api/info").json()["active_buyer"] == "hotel"
+    client.post("/api/events", json={"kind": "scene", "buyer": "cafe", "title": "Cafe"})
+    assert client.get("/api/info").json()["active_buyer"] == "cafe"
+    info = client.get("/api/info").json()
+    assert info["trade_http"] == "http://trade.test"
+    client.post("/api/events/clear")
+    assert client.get("/api/info").json()["active_buyer"] is None
+
+
+def test_frontend_is_served_with_spa_fallback(client):
+    res = client.get("/app", follow_redirects=False)
+    assert res.status_code in (301, 302, 307, 308)
+    assert res.headers["location"].endswith("/app/")
+    assert "SPA shell" in client.get("/app/").text
+    assert "SPA shell" in client.get("/app/accounts/hotel/orders").text
+    js = client.get("/app/assets/app.js")
+    assert js.status_code == 200 and "console.log" in js.text
+    assert "Trusted Trade" in client.get("/").text  # the old stage page is unchanged
+
+
+def test_frontend_not_built(world, tmp_path):
+    app = create_app(trade_http="http://trade.test", state_db=world.state_db,
+                     mandate_dir=world.mandates, catalog=fake_catalog,
+                     frontend_dist=tmp_path / "no-dist")
+    with TestClient(app) as c:
+        res = c.get("/app/")
+        assert res.status_code == 404
+        assert "Frontend not built" in res.text
+        assert c.get("/app/anything").status_code == 404
+
+
+def test_missing_state_db_is_a_clear_error(world, tmp_path):
+    app = create_app(trade_http="http://trade.test", state_db=tmp_path / "missing.db",
+                     mandate_dir=world.mandates, catalog=fake_catalog, frontend_dist=world.dist)
+    with TestClient(app) as c:
+        res = c.get("/api/accounts")
+    assert res.status_code == 503
+    assert res.json()["code"] == "state_db_unavailable"
+    assert not (tmp_path / "missing.db").exists()
