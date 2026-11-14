@@ -174,3 +174,41 @@ def test_post_buyers_over_http(http):
     garbage = http.post("/buyers", content=b"not json")
     assert garbage.status_code == 400
     assert garbage.json()["code"] == "bad_request"
+
+
+# Budget per week or month
+
+
+def registered(svc):
+    public_pem, token = signed()
+    svc.register_buyer(public_pem, token)
+    return token
+
+
+def test_a_second_order_in_the_same_week_goes_over_the_weekly_budget(svc):
+    token = registered(svc)  # €100 per order, €150 per week
+    first = svc.place_order(milk(svc, 60)["quote_id"], token, "Weekly milk")  # €93.60
+    assert first["status"] == "confirmed"
+    second = svc.place_order(milk(svc, 60)["quote_id"], token, "More milk")  # €187.20 this week
+    assert second["status"] == "pending_approval"
+    assert any("weekly budget of €150.00" in r for r in second["reasons"])
+
+
+def test_the_budget_starts_again_the_next_week(svc, clock):
+    token = registered(svc)
+    svc.place_order(milk(svc, 60)["quote_id"], token, "Weekly milk")
+    clock.forward(days=7)
+    again = svc.place_order(milk(svc, 60, need_by="2026-11-23")["quote_id"], token, "Weekly milk")
+    assert again["status"] == "confirmed"
+
+
+def test_an_order_waiting_for_approval_counts_and_a_rejected_one_does_not(svc):
+    token = registered(svc)
+    big = svc.place_order(milk(svc, 100)["quote_id"], token, "Big order")  # €156, over both limits
+    assert big["status"] == "pending_approval"
+    waiting = svc.place_order(milk(svc, 60)["quote_id"], token, "Weekly milk")
+    assert waiting["status"] == "pending_approval"
+    for approval in svc.list_approvals():
+        svc.decide_approval(approval["approval_id"], approve=False)
+    after = svc.place_order(milk(svc, 60)["quote_id"], token, "Weekly milk")
+    assert after["status"] == "confirmed"

@@ -15,7 +15,7 @@ import jwt
 from server import audit, signing
 from server.db import transaction
 from server.mandate import BUYER_ID, MandateError, check_mandate, verify_mandate
-from server.policy import decide, eur
+from server.policy import decide, eur, period_start
 from server.unusual import MODEL, REASON_PREFIX, THRESHOLD, flag_reason
 
 QUOTE_TTL = timedelta(minutes=15)
@@ -326,7 +326,8 @@ class Service:
         else:
             ai_unusual = self._ai_unusual(mandate["buyer"], history, quote, products, quote_id)
         decision = decide({**quote, "need_by": need_by.isoformat()}, mandate, products, history,
-                          confirm_unusual, ai_unusual)
+                          confirm_unusual, ai_unusual,
+                          self._spent_in_period(buyer_id, mandate, now, quote_id))
 
         order_id = existing["order_id"] if existing else _new_id("ord")
         approval_id = _new_id("apr") if decision.status == "pending_approval" else None
@@ -349,6 +350,18 @@ class Service:
         self._log("policy", f"decision:{decision.status}", " ".join(decision.reasons),
                   order_id=order_id, quote_id=quote_id)
         return self._order_result(self._order(order_id=order_id))
+
+    def _spent_in_period(self, buyer_id: str, mandate: dict, now: datetime, quote_id: str) -> float:
+        """What this buyer's other live orders in the current budget period add up to, in euros."""
+        budget = mandate.get("budget")
+        if not budget:
+            return 0.0
+        rows = self.conn.execute(
+            "SELECT q.body_json FROM orders o JOIN quotes q USING (quote_id) "
+            "WHERE o.buyer_id = ? AND o.quote_id != ? AND o.created_at >= ? "
+            "AND o.status IN ('confirmed', 'pending_approval')",
+            (buyer_id, quote_id, period_start(budget["period"], now).isoformat()))
+        return round(sum(json.loads(row["body_json"])["total_eur"] for row in rows), 2)
 
     def _ai_unusual(self, buyer: str, history: list[dict], quote: dict, products: dict,
                     quote_id: str) -> str | None:

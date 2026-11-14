@@ -230,3 +230,54 @@ def test_ai_flag_does_not_soften_a_rejection():
     tomato = line("460004", units=5, covers=5.0, unit_price=6.5, content_unit="KG")
     decision = decide(quote(tomato), mandate("hotel"), PRODUCTS, [], ai_unusual=AI_FLAG)
     assert decision.status == "rejected"
+
+
+# Budget per week or month
+
+from datetime import datetime, timezone  # noqa: E402
+
+from server.policy import period_start  # noqa: E402
+
+
+def budget_mandate(period="week", max_eur=150):
+    m = mandate("cafe")
+    m["budget"] = {"period": period, "max_eur": max_eur}
+    return m
+
+
+def forty_litres():
+    return quote(line(units=40, covers=40.0))  # 40 x 1.56 = 62.40
+
+
+def test_under_the_budget_is_confirmed():
+    decision = decide(forty_litres(), budget_mandate(), PRODUCTS, [], spent_in_period=60)
+    assert decision.status == "confirmed"
+
+
+def test_exactly_at_the_budget_is_confirmed():
+    decision = decide(forty_litres(), budget_mandate(), PRODUCTS, [], spent_in_period=87.6)
+    assert decision.status == "confirmed"
+
+
+def test_over_the_weekly_budget_needs_a_human():
+    decision = decide(forty_litres(), budget_mandate(), PRODUCTS, [], spent_in_period=108)
+    assert decision.status == "pending_approval"
+    assert any("€62.40" in r and "this week's spending to €170.40" in r
+               and "weekly budget of €150.00" in r for r in decision.reasons)
+
+
+def test_over_the_monthly_budget_says_month():
+    decision = decide(forty_litres(), budget_mandate("month"), PRODUCTS, [], spent_in_period=108)
+    assert decision.status == "pending_approval"
+    assert any("this month's spending" in r and "monthly budget" in r for r in decision.reasons)
+
+
+def test_a_mandate_without_a_budget_ignores_what_was_spent():
+    decision = decide(forty_litres(), mandate("cafe"), PRODUCTS, [], spent_in_period=10_000)
+    assert decision.status == "confirmed"
+
+
+def test_a_budget_period_starts_on_monday_or_on_the_first():
+    saturday = datetime(2026, 11, 14, 10, 30, tzinfo=timezone.utc)
+    assert period_start("week", saturday) == datetime(2026, 11, 9, tzinfo=timezone.utc)
+    assert period_start("month", saturday) == datetime(2026, 11, 1, tzinfo=timezone.utc)
