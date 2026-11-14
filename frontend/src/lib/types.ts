@@ -22,7 +22,7 @@ export interface Mandate {
   // From onboarding (kitchens that signed up themselves):
   budget?: { period: string; max_eur: number } | null
   delivery?: { days: string[] | null } | null
-  usual_orders?: { category: string; amount: number; content_unit: string; every: string }[]
+  usual_orders?: { category: string; amount: number; content_unit: string; every: string; on?: string | number | null }[]
   agent_key?: string
 }
 

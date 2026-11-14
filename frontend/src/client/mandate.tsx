@@ -66,6 +66,19 @@ function Rules({ m }: { m: Mandate }) {
         {m.delivery?.days?.length ? `Only on ${m.delivery.days.map((d) => WEEKDAYS[d] ?? d).join(', ')}. ` : 'Any day. '}
         Must arrive by the date you need it. Another day, or a missed order cut-off, comes to you.
       </Rule>
+      {m.usual_orders && m.usual_orders.length > 0 && (
+        <Rule icon={<Repeat className="size-4" />} title="Usual orders">
+          <ul className="space-y-0.5">
+            {m.usual_orders.map((o, i) => (
+              <li key={i}>
+                {o.amount} {o.content_unit} of {categoryName(o.category)} every {o.every}
+                {o.on != null && (o.every === 'month' ? ` on day ${o.on}` : ` on ${WEEKDAYS[String(o.on)] ?? o.on}`)}
+              </li>
+            ))}
+          </ul>
+          <span className="text-xs">An order more than 5 times the usual is checked with you first.</span>
+        </Rule>
+      )}
       <Rule icon={<UserCheck className="size-4" />} title="Who approves">
         {m.approvers.join(', ')}
       </Rule>

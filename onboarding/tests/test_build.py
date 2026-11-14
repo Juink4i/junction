@@ -64,6 +64,47 @@ def test_usual_orders_go_to_the_mandate_and_the_profile():
         {"what": "lactose-free milk", "amount": 40, "unit": "L", "every": "week"}]
 
 
+def test_a_usual_order_can_name_its_day():
+    answers = template("daycare")
+    answers["usual_orders"] = [
+        {"what": "milk", "category": "10400", "amount": 40, "unit": "L", "every": "week", "on": "THU"},
+        {"what": "cream", "category": "10400", "amount": 5, "unit": "L", "every": "month", "on": 15},
+    ]
+    result = built(answers)
+    assert [o["on"] for o in result.mandate["usual_orders"]] == ["THU", 15]
+    assert [o["on"] for o in result.profile["usual_orders"]] == ["THU", 15]
+    rules = " ".join(texts(result, "rule"))
+    assert "each week on Thursday" in rules
+    assert "each month on day 15" in rules
+    assert _shape_problems(result.mandate) == []
+
+
+def test_a_usual_order_without_a_day_has_no_on_key():
+    result = built()
+    assert "on" not in result.mandate["usual_orders"][0]
+    assert "on" not in result.profile["usual_orders"][0]
+
+
+@pytest.mark.parametrize("every, on", [("week", "XYZ"), ("week", 3), ("month", 0), ("month", 32),
+                                       ("month", "MON"), ("month", 2.5), ("month", True)])
+def test_a_usual_order_day_must_fit_its_rhythm(every, on):
+    answers = template("daycare")
+    answers["usual_orders"][0].update(every=every, on=on)
+    assert any("Usual order 1" in p and "day" in p for p in problems(answers))
+
+
+@pytest.mark.parametrize("every, on", [("week", "MON"), ("week", None), ("month", 1), ("month", 31),
+                                       ("month", None)])
+def test_a_usual_order_day_that_fits_is_fine(every, on):
+    answers = template("daycare")
+    answers["usual_orders"][0].update(every=every, on=on)
+    assert problems(answers) == []
+
+
+def test_options_offer_the_days_of_the_month():
+    assert options()["month_days"] == list(range(1, 32))
+
+
 def test_preferences_stay_out_of_the_mandate():
     result = built()
     assert "priorities" not in result.mandate and "pack_size" not in result.mandate

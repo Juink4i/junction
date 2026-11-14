@@ -18,6 +18,8 @@ PRIORITIES = {"price": "the lowest price", "reliability": "reliable delivery",
               "finnish": "Finnish origin", "sustainability": "sustainability"}
 PACK_SIZES = {"small": "small packs", "large": "large packs"}
 PERIODS = {"week": "week", "month": "month"}
+# A usual order may name its day: a weekday when it is weekly, a day of the month when monthly.
+MONTH_DAYS = list(range(1, 32))
 UNKNOWN_ALLERGEN_CHOICES = {"human": "A person checks it", "reject": "Refuse it"}
 KITCHEN_TYPES = {"daycare": "Day-care", "school": "School", "hotel": "Hotel", "cafe": "Café"}
 # Which label the page shows beside delivery days. The server enforces them, so they are a rule.
@@ -87,6 +89,7 @@ def options() -> dict[str, Any]:
         "priorities": _listed(PRIORITIES),
         "pack_sizes": _listed(PACK_SIZES),
         "periods": _listed(PERIODS),
+        "month_days": list(MONTH_DAYS),
         "unknown_allergens": _listed(UNKNOWN_ALLERGEN_CHOICES),
         "delivery_days_side": DELIVERY_DAYS_SIDE,
     }

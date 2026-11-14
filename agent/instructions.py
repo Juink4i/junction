@@ -109,6 +109,10 @@ These are preferences, not rules. Use them only to choose between products that 
 request. The server still decides what is allowed."""
 
 
+_WEEKDAYS = {"MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "Thursday",
+             "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday"}
+
+
 def preference_lines(profile: dict | None) -> list[str]:
     """The buyer's preferences as plain lines. They steer ranking only; none of them is a rule."""
     if not profile:
@@ -121,8 +125,11 @@ def preference_lines(profile: dict | None) -> list[str]:
     if profile.get("pack_size") in ("small", "large"):
         lines.append(f"Prefer {profile['pack_size']} packs.")
     for order in profile.get("usual_orders", []):
+        on = order.get("on")
+        when = ("" if on is None else f" on {_WEEKDAYS.get(on, on)}" if order.get("every") == "week"
+                else f" on day {on}")
         lines.append(f"A usual order is {order['amount']:g} {order['unit']} of {order['what']} "
-                     f"every {order['every']}. \"The usual\" means this.")
+                     f"every {order['every']}{when}. \"The usual\" means this.")
     return lines
 
 

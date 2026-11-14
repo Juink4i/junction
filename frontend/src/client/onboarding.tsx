@@ -20,6 +20,8 @@ interface UsualOrder {
   amount: number | null
   unit: 'L' | 'KG'
   every: string
+  /** Weekday code for a weekly order, 1-31 for a monthly one; null = any day. */
+  on?: string | number | null
 }
 interface Answers {
   kitchen: { name: string; type: string; approver: string; enrolment_code: string }
@@ -40,6 +42,7 @@ interface Options {
   pack_sizes: Choice[]
   periods: Choice[]
   unknown_allergens: Choice[]
+  month_days: number[]
 }
 interface Preview {
   problems: string[]
@@ -330,12 +333,46 @@ export default function Onboarding() {
                       <option value="L">L</option>
                       <option value="KG">KG</option>
                     </select>
-                    <select className={cn(select, 'flex-1')} value={o.every} onChange={(e) => update((d) => void (d.usual_orders[i].every = e.target.value))} aria-label="How often">
+                    <select
+                      className={cn(select, 'flex-1')}
+                      value={o.every}
+                      onChange={(e) =>
+                        update((d) => {
+                          d.usual_orders[i].every = e.target.value
+                          d.usual_orders[i].on = null // a weekday and a day of the month don't carry over
+                        })
+                      }
+                      aria-label="How often"
+                    >
                       {every.map((p) => (
                         <option key={p.code} value={p.code}>
                           {p.name}
                         </option>
                       ))}
+                    </select>
+                    <select
+                      className={cn(select, 'flex-1')}
+                      value={o.on == null ? '' : String(o.on)}
+                      onChange={(e) =>
+                        update((d) => {
+                          const v = e.target.value
+                          d.usual_orders[i].on = v === '' ? null : d.usual_orders[i].every === 'month' ? Number(v) : v
+                        })
+                      }
+                      aria-label={`Usual order ${i + 1}: which day`}
+                    >
+                      <option value="">any day</option>
+                      {o.every === 'month'
+                        ? opts.month_days.map((n) => (
+                            <option key={n} value={n}>
+                              on day {n}
+                            </option>
+                          ))
+                        : opts.weekdays.map((w) => (
+                            <option key={w.code} value={w.code}>
+                              on {w.name}
+                            </option>
+                          ))}
                     </select>
                     <Button type="button" variant="ghost" size="icon" aria-label={`Remove usual order ${i + 1}`} onClick={() => update((d) => void d.usual_orders.splice(i, 1))}>
                       <Trash2 />

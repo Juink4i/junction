@@ -66,6 +66,15 @@ def test_a_profile_adds_the_buyers_preferences_in_their_order():
     assert text.index("BUYER PREFERENCES") < text.index("GROUND RULES")
 
 
+def test_a_usual_order_with_a_day_says_when():
+    profile = {**PROFILE, "usual_orders": [
+        {"what": "milk", "amount": 40, "unit": "L", "every": "week", "on": "THU"},
+        {"what": "cream", "amount": 5, "unit": "L", "every": "month", "on": 15}]}
+    lines = preference_lines(profile)
+    assert "A usual order is 40 L of milk every week on Thursday. \"The usual\" means this." in lines
+    assert "A usual order is 5 L of cream every month on day 15. \"The usual\" means this." in lines
+
+
 def test_the_preferences_block_holds_no_rule():
     text = build_instruction("Päiväkoti Aurinko", SATURDAY, profile=PROFILE).lower()
     for word in RULE_WORDS:

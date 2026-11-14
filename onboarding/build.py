@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from onboarding.options import (ALLERGENS, CATEGORIES, PACK_SIZES, PERIODS, PRIORITIES, TAGS,
-                                UNKNOWN_ALLERGEN_CHOICES, WEEKDAYS)
+from onboarding.options import (ALLERGENS, CATEGORIES, MONTH_DAYS, PACK_SIZES, PERIODS, PRIORITIES,
+                                TAGS, UNKNOWN_ALLERGEN_CHOICES, WEEKDAYS)
 
 RULE, PREFERENCE = "rule", "preference"
 UNUSUAL_FACTOR = 5  # the server asks about an order above this many times the usual amount
@@ -94,6 +94,14 @@ def problems(answers: dict[str, Any]) -> list[str]:
             found.append(f"Usual order {number} must be in L or KG.")
         if order.get("every") not in PERIODS:
             found.append(f"Usual order {number} must be every week or every month.")
+        on = order.get("on")
+        if on is not None:
+            if order.get("every") == "week" and on not in WEEKDAYS:
+                found.append(f"Usual order {number}: pick a day of the week, or leave the day empty.")
+            elif order.get("every") == "month" and not (
+                    isinstance(on, int) and not isinstance(on, bool) and on in MONTH_DAYS):
+                found.append(f"Usual order {number}: the day of the month must be 1 to 31, "
+                             "or leave the day empty.")
         if order.get("category") not in CATEGORIES:
             found.append(f"Usual order {number} is in an unknown category.")
         elif allowed and order["category"] not in allowed:
@@ -107,6 +115,19 @@ def _eur(amount: float) -> str:
 
 def _and(words: list[str]) -> str:
     return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def _with_day(order: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+    """Add the usual order's day ("on") only when the kitchen named one."""
+    return {**entry, "on": order["on"]} if order.get("on") is not None else entry
+
+
+def _when(order: dict[str, Any]) -> str:
+    """ " on Thursday" for a weekly order, " on day 15" for a monthly one, "" for any day."""
+    on = order.get("on")
+    if on is None:
+        return ""
+    return f" on {WEEKDAYS[on]}" if order.get("every") == "week" else f" on day {on}"
 
 
 def _one_year_after(day: date) -> date:
@@ -154,8 +175,9 @@ def build(answers: dict[str, Any], buyer_id: str, today: date,
     if budget:
         mandate["budget"] = {"period": budget["period"], "max_eur": budget["max_eur"]}
     if usual:
-        mandate["usual_orders"] = [{"category": o["category"], "amount": o["amount"],
-                                    "content_unit": o["unit"], "every": o["every"]} for o in usual]
+        mandate["usual_orders"] = [_with_day(o, {"category": o["category"], "amount": o["amount"],
+                                                 "content_unit": o["unit"], "every": o["every"]})
+                                   for o in usual]
     if days:
         mandate["delivery"] = {"days": days}
     if agent_public_pem:
@@ -167,8 +189,8 @@ def build(answers: dict[str, Any], buyer_id: str, today: date,
         "kitchen_type": kitchen.get("type") or "other",
         "priorities": list(money["priorities"]),
         "pack_size": pack,
-        "usual_orders": [{"what": (o.get("what") or "").strip() or CATEGORIES[o["category"]],
-                          "amount": o["amount"], "unit": o["unit"], "every": o["every"]}
+        "usual_orders": [_with_day(o, {"what": (o.get("what") or "").strip() or CATEGORIES[o["category"]],
+                                       "amount": o["amount"], "unit": o["unit"], "every": o["every"]})
                          for o in usual],
     }
 
@@ -196,7 +218,7 @@ def build(answers: dict[str, Any], buyer_id: str, today: date,
                   "An order that would pass it goes to a person.")
     for order in profile["usual_orders"]:
         say(RULE, f"An order more than {UNUSUAL_FACTOR} times the usual ({order['amount']:g} "
-                  f"{order['unit']} of {order['what']} each {order['every']}) is checked with the "
+                  f"{order['unit']} of {order['what']} each {order['every']}{_when(order)}) is checked with the "
                   "kitchen first.")
     say(RULE, "A delivery after the date the goods are needed by needs a person's approval.")
     if days:
