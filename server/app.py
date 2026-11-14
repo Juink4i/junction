@@ -14,9 +14,10 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from server import auth
+from server import auth, vocabulary
 from server.db import connect
 from server.mandate import MandateError
+from server.seller import GeminiSeller, KeywordSeller
 from server.service import Buyer, Service
 from server.unusual import DecisionsScorer
 
@@ -40,12 +41,23 @@ def load_catalog() -> Any:
     return fake_catalog
 
 
+def _seller() -> Any:
+    """Gemini by default. SELLER=keyword forces the plain rules, for tests and rehearsals.
+
+    Without a Gemini key the Gemini seller falls back to the keyword rules on every search.
+    """
+    if os.environ.get("SELLER") == "keyword":
+        return KeywordSeller()
+    return GeminiSeller(vocabulary.names)
+
+
 def service() -> Service:
     global _service
     if _service is None:
         scorer = None if os.environ.get("DECISIONS_API") == "off" else DecisionsScorer()
         _service = Service(connect(), load_catalog(), lambda: datetime.now(timezone.utc), scorer,
-                           require_enrolment_code=os.environ.get("ENROLMENT_CODES") == "on")
+                           require_enrolment_code=os.environ.get("ENROLMENT_CODES") == "on",
+                           seller=_seller())
     return _service
 
 

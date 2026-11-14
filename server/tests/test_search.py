@@ -193,3 +193,23 @@ def test_a_seller_that_raises_does_not_fail_the_search():
 def test_the_keyword_seller_answers_for_every_candidate():
     screening = KeywordSeller().screen(Need("milk"), [Named("Whole milk")])
     assert screening == Screening({"1": Verdict(True)}, "keyword rules")
+
+
+def test_the_seller_runs_outside_the_services_lock():
+    # The approval and log pages must stay usable while the seller agent thinks.
+    import threading
+
+    class SlowSeller:
+        other_call_finished = False
+
+        def screen(self, need, candidates):
+            done = threading.Event()
+            threading.Thread(target=lambda: (svc.list_approvals(), done.set())).start()
+            self.other_call_finished = done.wait(timeout=2)
+            return KeywordSeller().screen(need, candidates)
+
+    seller = SlowSeller()
+    svc = Service(connect(":memory:"), fake_catalog, Clock(), seller=seller)
+    hotel = svc.authenticate(issue_demo_mandates(svc.conn)["hotel"])
+    svc.search_products(hotel, "milk")
+    assert seller.other_call_finished
