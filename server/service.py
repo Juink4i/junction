@@ -7,18 +7,21 @@ import math
 import secrets
 import sqlite3
 import threading
+from collections import Counter
 from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
 import jwt
 
-from server import audit, signing
+from server import audit, signing, vocabulary
 from server.db import transaction
 from server.mandate import BUYER_ID, MandateError, check_mandate, verify_mandate
+from server.seller import KeywordSeller, Need, keyword_verdict
 from server.policy import decide, eur, period_start
 from server.unusual import MODEL, REASON_PREFIX, THRESHOLD, flag_reason
 
 QUOTE_TTL = timedelta(minutes=15)
+CANDIDATE_LIMIT = 100  # the most products one search hands to the seller
 SUMMARY_FIELDS = ("id", "name_en", "name_fi", "category", "sales_unit", "tags", "labels")
 PRODUCT_FIELDS = SUMMARY_FIELDS + (
     "allergens_contains", "allergens_may_contain", "allergens_free_from", "allergen_info_missing",
@@ -37,7 +40,9 @@ def _pick(obj: Any, fields: tuple[str, ...]) -> dict[str, Any]:
         obj = dataclasses.asdict(obj)
     elif hasattr(obj, "model_dump"):
         obj = obj.model_dump()
-    return {f: obj[f] for f in fields}
+    picked = {f: obj[f] for f in fields}
+    picked["properties"] = vocabulary.names(picked["tags"])  # the tags in plain words
+    return picked
 
 
 def _new_id(prefix: str) -> str:
@@ -70,10 +75,12 @@ class Buyer:
 
 class Service:
     def __init__(self, conn: sqlite3.Connection, catalog: Any, now: Callable[[], datetime],
-                 unusual_scorer: Any = None, require_enrolment_code: bool = False):
+                 unusual_scorer: Any = None, require_enrolment_code: bool = False,
+                 seller: Any = None):
         self.conn = conn
         self.unusual_scorer = unusual_scorer
         self.require_enrolment_code = require_enrolment_code
+        self.seller = seller or KeywordSeller()
         self.catalog = catalog
         self.now = now
         self.key = signing.server_key(conn)
@@ -165,15 +172,80 @@ class Service:
 
     # Search and details: static data only.
 
-    @locked
-    def search_products(self, text: str, category: str | None = None,
-                        must_have_tags: list[str] | None = None, actor: str = "agent") -> list[dict]:
-        tags = must_have_tags or []
-        found = self.catalog.search_products(text, category, tags)
-        filters = "".join([f", category {category}" if category else "",
-                           f", tags {', '.join(tags)}" if tags else ""])
-        self._log(actor, "search_products", f"Searched for \"{text}\"{filters}. {len(found)} products found.")
-        return [_pick(p, SUMMARY_FIELDS) for p in found]
+    def _ask(self, buyer: Buyer, action: str, question: str, missing: list[str] | None = None,
+             unknown: list[str] | None = None) -> dict:
+        """The seller's side asks for what a request lacks. Plain code, no AI."""
+        with self._lock:
+            self._log(buyer.actor, action, f"Asked the agent: {question}")
+        return {"status": "needs_clarification", "missing": missing or [], "unknown": unknown or [],
+                "known_properties": vocabulary.known_names(), "question": question}
+
+    def search_products(self, buyer: Buyer, product: str | None, must_have: list[str] | None = None,
+                        amount: float | None = None, unit: str | None = None) -> dict:
+        """The products that fit a request, and what was dropped and why.
+
+        Not @locked as a whole: the seller agent can take seconds, and the approval and log
+        pages must not wait for it. Only the log write takes the lock.
+        """
+        understood = vocabulary.understand(product or "", must_have)
+        if understood.unknown:
+            words = ", ".join(f'"{w}"' for w in understood.unknown)
+            return self._ask(buyer, "search_products", unknown=understood.unknown,
+                             question=f"I don't know the product property {words}. Use one of the "
+                                      "known properties, or leave it out.")
+        if not understood.text:
+            return self._ask(buyer, "search_products", missing=["product"],
+                             question='What product do you need? Give it in plain words, '
+                                      'for example "milk".')
+
+        # The mandate's own must-haves and categories always apply. Plain code, before any AI.
+        from_mandate = list(buyer.mandate.get("substitution", {}).get("must_keep", []))
+        tags = list(dict.fromkeys(understood.tags + from_mandate))
+        allowed = buyer.mandate["auto_approve"].get("allowed_categories")
+        found = []
+        for category in allowed if allowed is not None else [None]:
+            found += self.catalog.search_products(understood.text, category, tags, CANDIDATE_LIMIT + 1)
+        truncated = len(found) > CANDIDATE_LIMIT
+        candidates = found[:CANDIDATE_LIMIT]
+
+        need = Need(" ".join(str(product).split()), tuple(vocabulary.names(tags)), amount, unit)
+        screening = self.seller.screen(need, candidates)
+        kept, dropped = [], []
+        for p in candidates:  # only candidates are looked at, so the seller cannot add a product
+            verdict = screening.verdicts.get(p.id) or keyword_verdict(need, p)
+            if verdict.keep:
+                kept.append(_pick(p, SUMMARY_FIELDS))
+            else:
+                dropped.append({"id": p.id, "name": p.name_en, "reason": verdict.reason})
+
+        must = f", must be {', '.join(need.must_have)}" if need.must_have else ""
+        why = Counter(d["reason"] for d in dropped).most_common(4)
+        dropped_text = (" Dropped: " + ", ".join(f"{reason} ({n})" for reason, n in why) + "."
+                        if dropped else "")
+        with self._lock:
+            self._log(buyer.actor, "search_products",
+                      f'Searched for "{understood.text}"{must}. {len(candidates)} candidates; '
+                      f"{screening.screened_by} kept {len(kept)} and dropped {len(dropped)}."
+                      f"{dropped_text}")
+
+        result = {
+            "status": "ok",
+            "understood": {"product": understood.text, "must_have": vocabulary.names(understood.tags),
+                           "from_mandate": vocabulary.names(from_mandate)},
+            "products": kept,
+            "dropped": dropped,
+            "screened_by": screening.screened_by,
+            "total_matches": len(candidates),
+            "truncated": truncated,
+        }
+        if truncated:
+            result["hint"] = (f"More than {CANDIDATE_LIMIT} products match. Add a must-have or "
+                              "more specific words.")
+        elif not candidates:
+            result["hint"] = (f'Nothing matches "{understood.text}"{must}. Try fewer or different '
+                              "words. A product only counts as having a property when its "
+                              "supplier claims it.")
+        return result
 
     @locked
     def get_product(self, product_id: str, actor: str = "agent") -> dict:

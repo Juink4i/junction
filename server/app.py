@@ -85,17 +85,25 @@ class QuoteLineRequest(BaseModel):
 
 
 @mcp.tool()
-def search_products(ctx: Context, text: str, category: str | None = None,
-                    must_have_tags: list[str] | None = None) -> list[dict[str, Any]] | dict[str, Any]:
-    """Search the Valio Aimo product file by text, category code and tags.
+def search_products(ctx: Context, product: str | None = None, must_have: list[str] | None = None,
+                    amount: float | None = None,
+                    unit: Literal["L", "KG"] | None = None) -> dict[str, Any]:
+    """Find the products that fit a request. No prices here; use request_quote for those.
 
-    Static data only: no prices or stock. Example: category "10400" (milk) with
-    must_have_tags ["FREE_FROM_LACTOSE"].
+    Say what is needed in plain words. product is the kind of product, for example "milk" or
+    "lactose-free milk". must_have lists properties every product must have, in plain words,
+    for example ["lactose-free"]. You never need a catalog code. amount and unit ("L" or
+    "KG") are optional and help leave out packs of the wrong size.
+
+    The reply lists the products that fit, and the ones that were dropped with the reason for
+    each. The buyer's mandate is applied: its own must-haves and allowed categories always
+    count. If something is missing or not understood, the reply has status
+    "needs_clarification" with a question and the list of known properties.
     """
     buyer, refused = _connect(ctx)
     if refused:
         return refused
-    return service().search_products(text, category, must_have_tags, actor=buyer.actor)
+    return service().search_products(buyer, product, must_have, amount, unit)
 
 
 @mcp.tool()

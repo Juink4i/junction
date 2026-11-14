@@ -24,7 +24,8 @@ TOOLS = {
     "get_approval_status",
     "get_audit_log",
 }
-SUMMARY_KEYS = {"id", "name_en", "name_fi", "category", "sales_unit", "tags", "labels"}
+SUMMARY_KEYS = {"id", "name_en", "name_fi", "category", "sales_unit", "tags", "labels", "properties"}
+
 PRODUCT_KEYS = SUMMARY_KEYS | {
     "allergens_contains",
     "allergens_may_contain",
@@ -95,7 +96,7 @@ async def test_tool_inputs_match_the_contract():
         tools = {t.name: t.input_schema for t in (await client.list_tools()).tools}
     inputs = {name: (set(s["properties"]), set(s.get("required", []))) for name, s in tools.items()}
     assert inputs == {
-        "search_products": ({"text", "category", "must_have_tags"}, {"text"}),
+        "search_products": ({"product", "must_have", "amount", "unit"}, set()),
         "get_product": ({"product_id"}, {"product_id"}),
         "request_quote": ({"lines", "need_by"}, {"lines", "need_by"}),
         "place_order": ({"quote_id", "mandate_token", "rationale", "confirm_unusual", "agent_signature"},
@@ -105,14 +106,15 @@ async def test_tool_inputs_match_the_contract():
     }
 
 
-async def test_search_products_returns_product_summaries():
+async def test_search_products_returns_what_fits_and_what_was_dropped():
     async with Client(mcp) as client:
-        found = await call(
-            client, "search_products", text="milk", category="10400",
-            must_have_tags=["FREE_FROM_LACTOSE"],
-        )
-    assert found
-    assert all(set(p) == SUMMARY_KEYS for p in found)
+        found = await call(client, "search_products", product="lactose-free milk")
+        asked = await call(client, "search_products", product="milk", must_have=["organic"])
+    assert set(found) == {"status", "understood", "products", "dropped", "screened_by",
+                          "total_matches", "truncated"}
+    assert found["products"] and all(set(p) == SUMMARY_KEYS for p in found["products"])
+    assert all(set(d) == {"id", "name", "reason"} for d in found["dropped"])
+    assert set(asked) == {"status", "missing", "unknown", "known_properties", "question"}
 
 
 async def test_get_product_returns_product():

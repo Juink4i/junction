@@ -300,9 +300,9 @@ def test_unknown_approval_is_an_error(svc):
 
 # Log
 
-def test_every_tool_call_and_decision_is_logged(svc, pending):
+def test_every_tool_call_and_decision_is_logged(svc, pending, tokens):
     quote_id, order = pending
-    svc.search_products("milk", "10400", ["FREE_FROM_LACTOSE"])
+    svc.search_products(svc.authenticate(tokens["hotel"]), "lactose-free milk")
     svc.get_product("464201")
     svc.get_approval_status(order["approval_id"])
     svc.get_audit_log(order_id=order["order_id"])
@@ -363,7 +363,9 @@ def test_parallel_tool_calls_keep_orders_and_the_log_intact(svc, tokens):
     def order():
         results.append(svc.place_order(milk(svc, 10)["quote_id"], tokens["hotel"], "Weekly milk"))
 
-    threads = [threading.Thread(target=run, args=(lambda: svc.search_products("milk"),)) for _ in range(4)]
+    hotel = svc.authenticate(tokens["hotel"])
+    threads = [threading.Thread(target=run, args=(lambda: svc.search_products(hotel, "milk"),))
+               for _ in range(4)]
     threads += [threading.Thread(target=run, args=(order,)) for _ in range(2)]
     for t in threads:
         t.start()
@@ -374,13 +376,13 @@ def test_parallel_tool_calls_keep_orders_and_the_log_intact(svc, tokens):
     assert svc.verify_log() == {"ok": True}
 
 
-def test_failed_write_does_not_leave_a_transaction_open(svc):
+def test_failed_write_does_not_leave_a_transaction_open(svc, tokens):
     from server.db import transaction
     with pytest.raises(Exception):
         with transaction(svc.conn):
             svc.conn.execute("INSERT INTO approvals (approval_id) VALUES ('apr_x')")
     assert not svc.conn.in_transaction
-    assert svc.search_products("milk")
+    assert svc.search_products(svc.authenticate(tokens["hotel"]), "milk")["products"]
 
 
 def test_decided_by_must_be_text(svc, pending):
