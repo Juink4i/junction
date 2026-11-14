@@ -307,3 +307,17 @@ def test_cut_off_still_ahead_is_confirmed():
 def test_a_line_without_a_closing_time_is_judged_by_its_flag_alone():
     assert decide(quote(line(closing_time=None)), mandate("hotel"), PRODUCTS, [], now=NOW).status == "confirmed"
     assert decide(quote(), mandate("hotel"), PRODUCTS, []).status == "confirmed"
+
+
+def test_a_cut_off_time_without_an_offset_counts_as_passed():
+    unclear = line(closing_time="2026-11-14T09:59:00")
+    decision = decide(quote(unclear), mandate("hotel"), PRODUCTS, [], now=NOW)
+    assert decision.status == "pending_approval"
+    assert any("cut-off" in r for r in decision.reasons)
+
+
+def test_a_cut_off_time_that_is_not_a_date_counts_as_passed():
+    unreadable = line(closing_time="yesterday afternoon")
+    decision = decide(quote(unreadable), mandate("hotel"), PRODUCTS, [], now=NOW)
+    assert decision.status == "pending_approval"
+    assert any("cut-off" in r for r in decision.reasons)

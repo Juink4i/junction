@@ -94,6 +94,21 @@ def _unusual(quote: dict, products: dict, history: list[dict]) -> list[str]:
     return reasons
 
 
+def _closed_since_quote(line: dict, now: datetime | None) -> bool:
+    """True when the cut-off stored in the quote line is at or before `now`.
+
+    A cut-off that cannot be read or compared with `now` counts as passed,
+    because unknown is not treated as safe. With no `now` or no stored time,
+    the line is judged by its `cutoff_passed` flag alone.
+    """
+    if now is None or not line.get("closing_time"):
+        return False
+    try:
+        return datetime.fromisoformat(line["closing_time"]) <= now
+    except (ValueError, TypeError):
+        return True
+
+
 def _needs_human(quote: dict, mandate: dict, products: dict, spent_in_period: float = 0.0,
                  now: datetime | None = None) -> list[str]:
     limits = mandate["auto_approve"]
@@ -123,9 +138,7 @@ def _needs_human(quote: dict, mandate: dict, products: dict, spent_in_period: fl
     for line in quote["lines"]:
         product = products[line["product_id"]]
         # The quote stores each line's cut-off, so no API call is needed to see it pass.
-        closed_since = bool(now and line.get("closing_time")
-                            and datetime.fromisoformat(line["closing_time"]) <= now)
-        if line["cutoff_passed"] or closed_since:
+        if line["cutoff_passed"] or _closed_since_quote(line, now):
             reasons.append(f"The order cut-off for {line['name']} has already passed, "
                            "so on-time delivery is not certain.")
         if line["available_date"] is None:
