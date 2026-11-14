@@ -159,3 +159,20 @@ def test_the_enrolment_code_is_never_written_into_the_mandate_or_the_profile():
     assert any("customer account" in text for text in texts(result, "rule"))
     answers["kitchen"]["enrolment_code"] = ""
     assert not any("customer account" in text for text in texts(built(answers), "rule"))
+
+
+def test_any_of_the_21_properties_can_be_a_must_have():
+    from datetime import date
+
+    from onboarding.build import build
+    from onboarding.options import options, template
+
+    listed = options()["tags"]
+    assert len(listed) == 21
+    assert listed[0] == {"code": "FREE_FROM_LACTOSE", "name": "lactose-free"}
+
+    answers = template("daycare")
+    answers["safety"]["must_be"] = ["FREE_FROM_GLUTEN", "VEGAN"]
+    built = build(answers, "aurinko-3f2a", date(2026, 11, 14))
+    assert built.mandate["substitution"]["must_keep"] == ["FREE_FROM_GLUTEN", "VEGAN"]
+    assert any("gluten-free and vegan" in s["text"] for s in built.sentences)
