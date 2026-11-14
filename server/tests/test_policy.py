@@ -360,3 +360,11 @@ def test_eggs_that_do_not_mention_milk_are_refused_when_the_mandate_refuses_unkn
     decision = decide(quote(_egg_line()), _lactose_free_school(unknown_allergens="reject"), _eggs(), [])
     assert decision.status == "rejected"
     assert any("lactose-free" in r and "rejects" in r for r in decision.reasons)
+
+
+def test_a_vegetarian_kitchen_has_unclaimed_eggs_checked_by_a_person():
+    m = mandate("school", blocked_allergens=[])
+    m["substitution"]["must_keep"] = ["VEGETARIAN"]
+    decision = decide(quote(_egg_line()), m, _eggs(), [])
+    assert decision.status == "pending_approval"
+    assert any("does not say whether Barn egg 30 pcs is vegetarian" in r for r in decision.reasons)

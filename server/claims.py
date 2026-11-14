@@ -1,9 +1,10 @@
 """Does a product have a must-have property? Plain code, no AI.
 
-A supplier's own claim (a nutrition claim tag) always proves it. For a free-from property
-the allergen data can prove it too: an egg whose data says "free from milk" is lactose-free
-even though no egg claims it. Data that does not mention the allergen proves nothing, so
-the answer is unknown, never yes.
+A supplier's own claim (a nutrition claim tag) always proves it. For the properties in RULES,
+the allergen data speaks too. It can prove a free-from property: an egg whose data says
+"free from milk" is lactose-free, though no egg claims it. It can rule a product out: milk is
+never vegan. Data that does not mention the allergen proves nothing, so the answer is unknown,
+never yes, and a person checks it.
 """
 
 from __future__ import annotations
@@ -13,19 +14,25 @@ from typing import Any, NamedTuple
 YES, NO, UNKNOWN = "yes", "no", "unknown"
 
 
-class FreeFrom(NamedTuple):
-    rules_out: frozenset[str]  # contains or may contain any of these: not free from it
-    proves: frozenset[str]     # declared free from any of these: free from it
+class Check(NamedTuple):
+    rules_out: frozenset[str]   # contains or may contain any of these allergens: no
+    proves: frozenset[str] = frozenset()  # declared free from any of these allergens: yes
+    claims: frozenset[str] = frozenset()  # another claim that also proves it
 
 
 _GLUTEN_CEREALS = frozenset({"AW", "UW", "NR", "GB", "GS", "GK"})  # gluten cereals, wheat, rye, ...
+_SEAFOOD = frozenset({"AF", "AC", "UM"})  # fish, crustaceans, molluscs
 
-FREE_FROM = {
-    "FREE_FROM_LACTOSE": FreeFrom(frozenset({"AM", "ML"}), frozenset({"AM", "ML"})),
-    "FREE_FROM_GLUTEN": FreeFrom(_GLUTEN_CEREALS, frozenset({"AW"})),
-    "FREE_FROM_WHEAT": FreeFrom(frozenset({"UW"}), frozenset({"UW", "AW"})),
-    "FREE_FROM_EGGS": FreeFrom(frozenset({"AE"}), frozenset({"AE"})),
-    "FREE_FROM_SOY": FreeFrom(frozenset({"AY"}), frozenset({"AY"})),
+# The properties a kitchen may require of every product. Any other would rule out every
+# product that does not claim it, like every egg, so it is a preference instead.
+RULES = {
+    "FREE_FROM_LACTOSE": Check(frozenset({"AM", "ML"}), frozenset({"AM", "ML"})),
+    "FREE_FROM_GLUTEN": Check(_GLUTEN_CEREALS, frozenset({"AW"})),
+    "FREE_FROM_WHEAT": Check(frozenset({"UW"}), frozenset({"UW", "AW"})),
+    "FREE_FROM_EGGS": Check(frozenset({"AE"}), frozenset({"AE"})),
+    "FREE_FROM_SOY": Check(frozenset({"AY"}), frozenset({"AY"})),
+    "VEGAN": Check(_SEAFOOD | {"AM", "ML", "AE"}),
+    "VEGETARIAN": Check(_SEAFOOD, claims=frozenset({"VEGAN"})),
 }
 
 
@@ -34,14 +41,14 @@ def _codes(values: list[str]) -> set[str]:
 
 
 def status(product: Any, tag: str) -> str:
-    """YES, NO or UNKNOWN. A property allergen data cannot speak to is YES only when claimed."""
-    if tag in product.tags:
+    """YES, NO or UNKNOWN. A property not in RULES is YES only when claimed."""
+    check = RULES.get(tag)
+    if tag in product.tags or (check and check.claims & set(product.tags)):
         return YES
-    rule = FREE_FROM.get(tag)
-    if rule is None:
+    if check is None:
         return NO
-    if rule.rules_out & _codes(product.allergens_contains + product.allergens_may_contain):
+    if check.rules_out & _codes(product.allergens_contains + product.allergens_may_contain):
         return NO
-    if rule.proves & _codes(product.allergens_free_from):
+    if check.proves & _codes(product.allergens_free_from):
         return YES
     return UNKNOWN

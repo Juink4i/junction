@@ -165,13 +165,18 @@ export interface OnboardingAnswers {
   delivery: { days: string[]; pack_size: string }
   usual_orders: UsualOrder[]
   substitution?: { allowed: boolean; max_price_increase_pct: number }
+  /** Claims to favour when products are otherwise equal. Never a rule. */
+  prefer?: string[]
 }
 export interface OnboardingOptions {
   kitchen_types: Choice[]
   templates: Record<string, OnboardingAnswers>
   allergens: Choice[]
   categories: Choice[]
+  /** What every product must be: only what the server can check. */
   tags: Choice[]
+  /** Every other claim, offered as a preference. */
+  prefer_tags: Choice[]
   weekdays: Choice[]
   priorities: Choice[]
   pack_sizes: Choice[]
@@ -187,9 +192,10 @@ export interface Profile {
   kitchen_type: string
   priorities: string[]
   pack_size: string
+  prefer?: string[]
   usual_orders: { what: string; amount: number; unit: string; every: string; on?: string | number | null }[]
 }
-export type ProfileChanges = Partial<Pick<Profile, 'priorities' | 'pack_size'>>
+export type ProfileChanges = Partial<Pick<Profile, 'priorities' | 'pack_size' | 'prefer'>>
 
 export interface VerifyResult {
   ok: boolean

@@ -114,7 +114,7 @@ def test_preferences_stay_out_of_the_mandate():
 
 def test_the_profile_holds_no_rule():
     assert set(built().profile) == {"buyer_id", "name", "kitchen_type", "priorities", "pack_size",
-                                    "usual_orders"}
+                                    "prefer", "usual_orders"}
 
 
 def test_delivery_days_are_a_rule_in_the_mandate():
@@ -212,7 +212,8 @@ def test_only_properties_allergen_data_can_prove_are_offered_as_rules():
     from onboarding.options import options, template
 
     assert [t["code"] for t in options()["tags"]] == [
-        "FREE_FROM_LACTOSE", "FREE_FROM_GLUTEN", "FREE_FROM_EGGS", "FREE_FROM_SOY", "FREE_FROM_WHEAT"]
+        "FREE_FROM_LACTOSE", "FREE_FROM_GLUTEN", "VEGAN", "VEGETARIAN", "FREE_FROM_EGGS",
+        "FREE_FROM_SOY", "FREE_FROM_WHEAT"]
     assert options()["tags"][0] == {"code": "FREE_FROM_LACTOSE", "name": "lactose-free"}
 
     answers = template("daycare")
@@ -225,10 +226,31 @@ def test_only_properties_allergen_data_can_prove_are_offered_as_rules():
                     "Anything else needs a person's approval.")
 
 
-def test_a_property_allergen_data_cannot_prove_is_not_a_rule():
+def test_any_other_property_is_a_preference_not_a_rule():
     from onboarding.build import problems
     from onboarding.options import template
 
     answers = template("daycare")
-    answers["safety"]["must_be"] = ["VEGAN"]
-    assert any(p.startswith("Vegan cannot be a rule") and "single order" in p for p in problems(answers))
+    answers["safety"]["must_be"] = ["LOW_SODIUM_SALT"]
+    assert any(p.startswith("Low-salt cannot be a rule") and "preference" in p for p in problems(answers))
+
+
+def test_the_other_14_properties_are_offered_as_preferences():
+    from datetime import date
+
+    from onboarding.build import build, problems
+    from onboarding.options import options, template
+
+    offered = [t["code"] for t in options()["prefer_tags"]]
+    assert len(offered) == 14 and "FREE_FROM_COLOURING_AGENTS" in offered and "VEGAN" not in offered
+
+    answers = template("daycare")
+    answers["prefer"] = ["LOW_SODIUM_SALT", "FREE_FROM_COLOURING_AGENTS"]
+    built = build(answers, "aurinko-3f2a", date(2026, 11, 14))
+    assert built.profile["prefer"] == ["LOW_SODIUM_SALT", "FREE_FROM_COLOURING_AGENTS"]
+    assert "LOW_SODIUM_SALT" not in str(built.mandate)  # a preference is never signed as a rule
+    assert {"kind": "preference", "text": "If two products are equally good, prefer ones that are "
+            "low-salt and no colouring agents."} in built.sentences
+
+    answers["prefer"] = ["VEGAN"]
+    assert any("Vegan" in p and "rule" in p for p in problems(answers))

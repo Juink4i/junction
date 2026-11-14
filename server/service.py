@@ -267,7 +267,7 @@ class Service:
         found = []
         for category in categories:
             found += self.catalog.search_products(understood.text, category, tags, CANDIDATE_LIMIT + 1)
-        provable = [t for t in tags if t in claims.FREE_FROM]
+        provable = [t for t in tags if t in claims.RULES]
         if provable:
             found += self._proven_by_allergen_data(understood.text, categories, tags, provable,
                                                    {p.id for p in found})
@@ -449,7 +449,7 @@ class Service:
             available_date=offer.available_date, closing_time=offer.closing_time,
             cutoff_passed=bool(offer.cutoff_passed), available_units=offer.available_units,
             reliability=product.delivery_reliability, country=product.country,
-            labels=tuple(product.labels), carbon=product.carbon_kg_per_kg)
+            labels=tuple(product.labels), carbon=product.carbon_kg_per_kg, tags=tuple(product.tags))
 
     def _issue_quote(self, lines: list[ranking.Line], need_by: date, now: datetime,
                      buyer_id: str | None = None, set_id: str | None = None,
@@ -588,7 +588,8 @@ class Service:
                 f"{amount:g} {unit} yourself."))
 
         prefs = preferences or {}
-        ranked = ranking.rank(candidates, need_by, prefs.get("priorities"), prefs.get("pack_size"))
+        ranked = ranking.rank(candidates, need_by, prefs.get("priorities"), prefs.get("pack_size"),
+                              prefs.get("prefer"))
         plans = ranking.options(ranked, amount, need_by, MAX_OPTIONS)
         offered = {line.candidate.product_id for plan in plans for line in plan.lines}
         for c in ranked:

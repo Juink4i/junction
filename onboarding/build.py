@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from onboarding.options import (ALLERGENS, CATEGORIES, MONTH_DAYS, MUST_BE, PACK_SIZES, PERIODS, PRIORITIES,
+from onboarding.options import (ALLERGENS, CATEGORIES, MONTH_DAYS, MUST_BE, PACK_SIZES, PERIODS, PREFER,
+                                PRIORITIES,
                                 TAGS, UNKNOWN_ALLERGEN_CHOICES, WEEKDAYS)
 
 RULE, PREFERENCE = "rule", "preference"
@@ -67,8 +68,9 @@ def problems(answers: dict[str, Any]) -> list[str]:
             found.append(f"Unknown {word}: {', '.join(unknown)}.")
     for tag in safety.get("must_be") or []:
         if tag in TAGS and tag not in MUST_BE:
-            found.append(f"{TAGS[tag].capitalize()} cannot be a rule for every product. Ask for "
-                         "it on a single order instead.")
+            found.append(f"{TAGS[tag].capitalize()} cannot be a rule for every product. Choose "
+                         "it as a preference instead.")
+    found += prefer_problems(answers.get("prefer"))
     if safety.get("unknown_allergens", "human") not in UNKNOWN_ALLERGEN_CHOICES:
         found.append("For a product without allergen information, choose: a person checks it, "
                      "or refuse it.")
@@ -92,6 +94,22 @@ def problems(answers: dict[str, Any]) -> list[str]:
 
     found += usual_order_problems(answers.get("usual_orders") or [],
                                   money.get("allowed_categories") or [])
+    return found
+
+
+def prefer_problems(prefer: Any) -> list[str]:
+    """What is wrong with the properties a kitchen prefers. web.profile_edit uses it too."""
+    if prefer is None:
+        return []
+    if not isinstance(prefer, list):
+        return ["Preferred properties must be a list."]
+    found = []
+    for tag in prefer:
+        if tag in MUST_BE:
+            found.append(f"{TAGS[tag].capitalize()} is a rule, not a preference. Choose it under "
+                         "every product must be.")
+        elif tag not in PREFER:
+            found.append(f"Unknown product property: {tag}.")
     return found
 
 
@@ -201,6 +219,7 @@ def build(answers: dict[str, Any], buyer_id: str, today: date,
         "kitchen_type": kitchen.get("type") or "other",
         "priorities": list(money["priorities"]),
         "pack_size": pack,
+        "prefer": list(answers.get("prefer") or []),
         "usual_orders": [_with_day(o, {"what": (o.get("what") or "").strip() or CATEGORIES[o["category"]],
                                        "amount": o["amount"], "unit": o["unit"], "every": o["every"]})
                          for o in usual],
@@ -247,6 +266,9 @@ def build(answers: dict[str, Any], buyer_id: str, today: date,
     say(RULE, f"Orders that need a person go to {approver}.")
     say(PREFERENCE, "When several products fit, prefer "
                     f"{', then '.join(PRIORITIES[p] for p in money['priorities'])}.")
+    if profile["prefer"]:
+        say(PREFERENCE, "If two products are equally good, prefer ones that are "
+                        f"{_and([TAGS[t] for t in profile['prefer']])}.")
     say(PREFERENCE, f"If two products are equally good, prefer {PACK_SIZES[pack]}. "
                     "Every pack size can still be ordered.")
     return Built(mandate, profile, rows)

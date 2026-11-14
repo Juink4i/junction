@@ -126,6 +126,7 @@ class Preferences(BaseModel):
     """The buyer's own order of what matters. Preferences only order products that already fit."""
     priorities: list[str] | None = None  # any of: price, reliability, finnish, sustainability
     pack_size: Literal["small", "large"] | None = None
+    prefer: list[str] | None = None  # claims to favour, e.g. LOW_SODIUM_SALT; they never exclude
 
 
 @mcp.tool()

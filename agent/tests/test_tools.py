@@ -234,3 +234,10 @@ async def test_alternatives_in_a_place_order_reply_reach_the_decision_event_and_
     assert await _tools(box)["place_order"]("q_1", "Best option that arrives on time.") == result
     decision = next(e for e in sink.history if e["kind"] == "decision")
     assert decision["alternatives"] == result["alternatives"]
+
+
+async def test_preferred_properties_are_attached_by_code_too():
+    link = RecordingLink({"status": "ok", "options": [], "not_offered": []})
+    box, _ = _box(link, profile={"priorities": ["price"], "prefer": ["LOW_SODIUM_SALT"]})
+    await _tools(box)["request_quote"](["464201"], 40, "L", MONDAY)
+    assert link.calls[0][1]["preferences"] == {"priorities": ["price"], "prefer": ["LOW_SODIUM_SALT"]}

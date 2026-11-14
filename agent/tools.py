@@ -120,6 +120,8 @@ class Toolbox:
             preferences["priorities"] = list(profile["priorities"])
         if profile.get("pack_size") in ("small", "large"):
             preferences["pack_size"] = profile["pack_size"]
+        if profile.get("prefer"):
+            preferences["prefer"] = list(profile["prefer"])
         return preferences
 
     def functions(self) -> list[Callable[..., Awaitable[dict[str, Any]]]]:

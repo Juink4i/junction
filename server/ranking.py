@@ -45,6 +45,7 @@ class Candidate:
     country: str | None = None
     labels: tuple[str, ...] = ()
     carbon: float | None = None
+    tags: tuple[str, ...] = ()  # nutrition claims, e.g. LOW_SODIUM_SALT
 
     @property
     def total_eur(self) -> float:
@@ -93,8 +94,9 @@ def _order(priorities: list[str] | None) -> tuple[str, ...]:
 
 
 def rank(candidates: list[Candidate], need_by: date, priorities: list[str] | None = None,
-         pack_size: str | None = None) -> list[Candidate]:
-    """Best first. `priorities` is the buyer's own order of price, reliability, finnish, sustainability."""
+         pack_size: str | None = None, prefer: list[str] | None = None) -> list[Candidate]:
+    """Best first. `priorities` is the buyer's own order of price, reliability, finnish, sustainability.
+    `prefer` lists claims the buyer would like, such as LOW_SODIUM_SALT; they only break ties."""
     if not candidates:
         return []
     cheapest = min(c.total_eur for c in candidates) or 1.0
@@ -114,6 +116,8 @@ def rank(candidates: list[Candidate], need_by: date, priorities: list[str] | Non
             elif name == "sustainability":
                 parts.append(0 if ECO_LABELS & set(c.labels) else 1)
                 parts.append(c.carbon if c.carbon is not None else math.inf)
+        if prefer:
+            parts.append(-len(set(prefer) & set(c.tags)))
         if pack_size == "small":
             parts.append(c.content_per_unit)
         elif pack_size == "large":

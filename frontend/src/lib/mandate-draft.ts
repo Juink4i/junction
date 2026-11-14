@@ -21,6 +21,8 @@ export interface Draft {
   /** Null for a buyer without a profile (the demo buyers). */
   priorities: string[] | null
   packSize: string | null
+  /** Claims to favour; null without a profile. */
+  prefer: string[] | null
 }
 
 export const draftOf = (m: Mandate, profile: Profile | null): Draft => ({
@@ -47,6 +49,7 @@ export const draftOf = (m: Mandate, profile: Profile | null): Draft => ({
   })),
   priorities: profile ? profile.priorities : null,
   packSize: profile ? profile.pack_size : null,
+  prefer: profile ? (profile.prefer ?? []) : null,
 })
 
 const list = (s: string) => s.split(/[,\s]+/).map((x) => x.trim()).filter(Boolean)
@@ -162,6 +165,13 @@ export function changesOf(
   if (profile && d.packSize && d.packSize !== profile.pack_size) {
     prefs.pack_size = d.packSize
     summary.push(`If two products are equally good, prefer ${nameIn(opts.pack_sizes, d.packSize)}`)
+  }
+  if (profile && d.prefer) {
+    const prefer = inOrder(d.prefer, opts.prefer_tags)
+    if (prefer.join() !== inOrder(profile.prefer ?? [], opts.prefer_tags).join()) {
+      prefs.prefer = prefer
+      summary.push(prefer.length ? `If two products are equally good, prefer ones that are ${prefer.map((t) => nameIn(opts.prefer_tags, t)).join(', ')}` : 'No preferred properties')
+    }
   }
   return { body, prefs, summary }
 }

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from catalog.names import tag_name
+
 ROLE = """\
 You are the purchasing agent for {buyer}, a professional kitchen in Finland. You buy from \
 Valio Aimo, a food wholesaler, through its trade server's tools. You work for the buyer: pass \
@@ -102,6 +104,10 @@ def preference_lines(profile: dict | None) -> list[str]:
         lines.append("When several products fit, prefer " + ", then ".join(priorities) + ".")
     if profile.get("pack_size") in ("small", "large"):
         lines.append(f"Prefer {profile['pack_size']} packs.")
+    prefer = [tag_name(t) for t in profile.get("prefer", [])]
+    if prefer:
+        lines.append("If two products are equally good, prefer ones that are "
+                     + (prefer[0] if len(prefer) == 1 else ", ".join(prefer[:-1]) + " and " + prefer[-1]) + ".")
     for order in profile.get("usual_orders", []):
         on = order.get("on")
         when = ("" if on is None else f" on {_WEEKDAYS.get(on, on)}" if order.get("every") == "week"

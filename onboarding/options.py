@@ -6,7 +6,7 @@ import copy
 from typing import Any
 
 from catalog.names import ALLERGEN_NAMES, CATEGORY_NAMES, TAG_NAMES
-from server.claims import FREE_FROM
+from server.claims import RULES
 
 # The 14 allergens EU law requires on labels, as GS1 codes.
 EU_ALLERGEN_CODES = ("AW", "AC", "AE", "AF", "AP", "AY", "AM", "AN", "BC", "BM", "AS", "AU", "NL", "UM")
@@ -15,7 +15,9 @@ CATEGORIES = dict(CATEGORY_NAMES)
 TAGS = dict(TAG_NAMES)  # every nutrition claim in the product file, most common first
 # What a kitchen may require of every product: only what allergen data can prove, or a rule like
 # "every product must be vegan" rules out every egg. Others go on a single order.
-MUST_BE = {code: name for code, name in TAGS.items() if code in FREE_FROM}
+MUST_BE = {code: name for code, name in TAGS.items() if code in RULES}
+# Every other claim is a preference: it ranks products that claim it higher, and excludes nothing.
+PREFER = {code: name for code, name in TAGS.items() if code not in RULES}
 WEEKDAYS = {"MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "Thursday",
             "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday"}
 PRIORITIES = {"price": "the lowest price", "reliability": "reliable delivery",
@@ -49,6 +51,7 @@ def _kitchen(kind: str, name: str, approver: str, *, blocked: list[str], must_be
                           "every": "week"}],
         # Not asked on the page: the server does not enforce these two today.
         "substitution": {"allowed": substitution[0], "max_price_increase_pct": substitution[1]},
+        "prefer": [],
     }
 
 
@@ -90,6 +93,7 @@ def options() -> dict[str, Any]:
         "allergens": _listed(ALLERGENS),
         "categories": _listed(CATEGORIES),
         "tags": _listed(MUST_BE),
+        "prefer_tags": _listed(PREFER),
         "weekdays": _listed(WEEKDAYS),
         "priorities": _listed(PRIORITIES),
         "pack_sizes": _listed(PACK_SIZES),

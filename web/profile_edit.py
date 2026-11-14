@@ -10,11 +10,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from onboarding.build import prefer_problems
 from onboarding.options import PACK_SIZES, PRIORITIES
 from web.accounts import MandateFiles
 from web.mandate_edit import EditError, write_profile
 
-EDITABLE = {"priorities", "pack_size"}
+EDITABLE = {"priorities", "pack_size", "prefer"}
 
 
 def read_profile(files: MandateFiles, buyer_id: str) -> dict:
@@ -33,7 +34,7 @@ def problems(profile: dict) -> list[str]:
                      "Finnish origin, sustainability.")
     if profile.get("pack_size") not in PACK_SIZES:
         found.append("Pack size must be small or large.")
-    return found
+    return found + prefer_problems(profile.get("prefer"))
 
 
 def update_profile(*, buyer_id: str, change: Any, files: MandateFiles) -> dict:

@@ -359,9 +359,10 @@ def request_quote(ctx: Context, product_ids: list[str] | None = None, amount: fl
             cutoff_passed=p["cutoff_passed"],
             available_units=None if available is None else int(available),
             reliability=p.get("reliability"), country="FI", labels=tuple(p["labels"]),
-            carbon=p.get("carbon")))
+            carbon=p.get("carbon"), tags=tuple(p.get("tags", ()))))
     prefs = preferences or {}
-    ranked = ranking.rank(candidates, need, prefs.get("priorities"), prefs.get("pack_size"))
+    ranked = ranking.rank(candidates, need, prefs.get("priorities"), prefs.get("pack_size"),
+                          prefs.get("prefer"))
     plans = ranking.options(ranked, amount, need)
     offered = {line.candidate.product_id for plan in plans for line in plan.lines}
     for c in ranked:

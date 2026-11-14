@@ -53,6 +53,8 @@ def test_put_changes_priorities_and_pack_size(client, world):
     ({"priorities": ["price", "price", "finnish", "sustainability"]}, "bad_profile", "Rank each"),
     ({"priorities": ["price"]}, "bad_profile", "Rank each"),
     ({"pack_size": "huge"}, "bad_profile", "small or large"),
+    ({"prefer": ["VEGAN"]}, "bad_profile", "Vegan"),
+    ({"prefer": "LOW_SODIUM_SALT"}, "bad_profile", "list"),
     ({"usual_orders": []}, "bad_field", "mandate"),
     ({"name": "Other kitchen"}, "bad_field", "name"),
     ([1], "bad_field", "JSON object"),
@@ -64,3 +66,9 @@ def test_rejects_bad_changes(client, world, body, code, words):
     assert res.json()["code"] == code
     assert words in res.json()["message"]
     assert _profile(world) == before
+
+
+def test_put_changes_the_preferred_properties(client, world):
+    res = client.put(f"/api/accounts/{KID}/profile", json={"prefer": ["LOW_SODIUM_SALT"]})
+    assert res.status_code == 200, res.text
+    assert _profile(world)["prefer"] == ["LOW_SODIUM_SALT"]

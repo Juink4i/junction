@@ -60,7 +60,7 @@ Anything else gets 401 `{code, message, retryable: false, onboarding_url}` with 
 |---|---|---|
 | `search_products` | `product`, `must_have?`, `amount?`, `unit?` (plain words, no codes) | `SearchResult` |
 | `get_product` | `product_id` | `Product` |
-| `request_quote` | `product_ids`, `amount`, `unit`, `need_by`, `preferences?: {priorities?, pack_size?}` | `QuoteSet` |
+| `request_quote` | `product_ids`, `amount`, `unit`, `need_by`, `preferences?: {priorities?, pack_size?, prefer?}` | `QuoteSet` |
 
 `unit` is `"L"`, `"KG"` or `"PCS"` (pieces), or a word such as "litres" or "kpl". Any other unit, a product set that cannot be measured in the unit, or the same amount re-sent in a different unit gets `needs_clarification` with `missing: ["unit"]`. The server never carries a number over to another unit.
 | `place_order` | `quote_id`, `rationale`, `agent_signature?` | `OrderResult` |

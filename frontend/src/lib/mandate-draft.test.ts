@@ -12,6 +12,7 @@ const opts = {
     { code: 'sustainability', name: 'sustainability' },
   ],
   pack_sizes: [{ code: 'small', name: 'smaller packs' }, { code: 'large', name: 'bigger packs' }],
+  prefer_tags: [{ code: 'LOW_SODIUM_SALT', name: 'low-salt' }, { code: 'FREE_FROM_COLOURING_AGENTS', name: 'no colouring agents' }],
 } as OnboardingOptions
 
 const mandate: Mandate = {
@@ -101,5 +102,15 @@ describe('mandate draft', () => {
       'Prefer Finnish origin, then the lowest price, then reliable delivery, then sustainability',
       'If two products are equally good, prefer bigger packs',
     ])
+  })
+
+  it('sends preferred properties as a preference, never in the mandate', () => {
+    const d = draftOf(mandate, profile)
+    expect(d.prefer).toEqual([])
+    d.prefer = ['FREE_FROM_COLOURING_AGENTS', 'LOW_SODIUM_SALT']
+    const c = changesOf(mandate, profile, d, opts)
+    expect(c.body).toEqual({})
+    expect(c.prefs).toEqual({ prefer: ['LOW_SODIUM_SALT', 'FREE_FROM_COLOURING_AGENTS'] })
+    expect(c.summary).toEqual(['If two products are equally good, prefer ones that are low-salt, no colouring agents'])
   })
 })

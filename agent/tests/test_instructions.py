@@ -99,3 +99,9 @@ def test_the_agent_is_told_never_to_convert_the_buyers_amount():
     text = build_instruction("Hotel Chain Oy", SATURDAY)
     assert "PCS" in text
     assert "Never convert" in text
+
+
+def test_preferred_properties_are_named_as_a_tie_break():
+    lines = preference_lines({**PROFILE, "prefer": ["LOW_SODIUM_SALT", "FREE_FROM_COLOURING_AGENTS"]})
+    assert ("If two products are equally good, prefer ones that are low-salt and no colouring "
+            "agents.") in lines

@@ -121,3 +121,22 @@ def test_no_split_when_the_rest_cannot_be_covered():
 def test_only_a_short_first_choice_causes_a_split():
     ranked = rank([milk("A", 1.00), milk("B", 1.10, available_units=100)], MONDAY)
     assert [o.label for o in options(ranked, 1000, MONDAY)] == ["best"]
+
+
+def test_a_preferred_property_breaks_a_tie_before_pack_size():
+    plain, low_salt = milk("A", 1.00), milk("B", 1.01, tags=("LOW_SODIUM_SALT",))
+    assert order([plain, low_salt], prefer=["LOW_SODIUM_SALT"]) == ["B", "A"]
+    assert order([plain, low_salt]) == ["A", "B"]
+    small_plain, large_low_salt = milk("A", 1.00), milk("B", 10.00, 10.0, tags=("LOW_SODIUM_SALT",))
+    assert order([small_plain, large_low_salt], prefer=["LOW_SODIUM_SALT"], pack_size="small") == ["B", "A"]
+
+
+def test_more_preferred_properties_rank_higher():
+    one = milk("A", 1.00, tags=("FREE_FROM_COLOURING_AGENTS",))
+    two = milk("B", 1.00, tags=("FREE_FROM_COLOURING_AGENTS", "LOW_SODIUM_SALT"))
+    assert order([one, two], prefer=["FREE_FROM_COLOURING_AGENTS", "LOW_SODIUM_SALT"]) == ["B", "A"]
+
+
+def test_a_preference_never_beats_the_buyers_priorities():
+    cheap, dear_low_salt = milk("A", 1.00), milk("B", 1.50, tags=("LOW_SODIUM_SALT",))
+    assert order([cheap, dear_low_salt], prefer=["LOW_SODIUM_SALT"]) == ["A", "B"]

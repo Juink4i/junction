@@ -51,7 +51,7 @@ function Rules({ m, profile, opts }: { m: Mandate; profile: Profile | null; opts
       {m.substitution.must_keep.length > 0 && (
         <Rule icon={<BadgeCheck className="size-4" />} title="Every product must be">
           <TagChips tags={m.substitution.must_keep} />
-          <span className="block text-xs">The supplier says so, or its allergen data shows it. If the data doesn’t say, it is treated like missing allergen info.</span>
+          <span className="block text-xs">The supplier says so, or its allergen data shows it. If neither says, it is treated like missing allergen info.</span>
         </Rule>
       )}
       <Rule icon={<Repeat className="size-4" />} title="Substitutes">
@@ -94,6 +94,11 @@ function Preferences({ profile, opts }: { profile: Profile; opts: OnboardingOpti
       <Rule icon={<Sparkles className="size-4" />} title="When several products fit, prefer">
         {profile.priorities.map((p) => nameIn(opts.priorities, p)).join(', then ')}.
       </Rule>
+      {(profile.prefer?.length ?? 0) > 0 && (
+        <Rule icon={<BadgeCheck className="size-4" />} title="If two products are equally good, prefer ones that are">
+          <TagChips tags={profile.prefer ?? []} />
+        </Rule>
+      )}
       <Rule icon={<Package className="size-4" />} title="If two products are equally good">
         Prefer {nameIn(opts.pack_sizes, profile.pack_size)}. Every pack size can still be ordered.
       </Rule>
@@ -186,7 +191,7 @@ function Editor({ account, m, profile, opts, onDone }: { account: Account; m: Ma
         )}
       </div>
 
-      <Field label="Every product must be" hint="The supplier says so, or its allergen data shows it. If the data doesn’t say, it follows the missing-allergen setting below. Other properties, like vegan, go on a single order.">
+      <Field label="Every product must be" hint="The supplier says so, or its allergen data shows it. If neither says, it follows the missing-allergen setting below. Other properties, like low-salt, are preferences.">
         <Chips items={withHeld(opts.tags, d.mustKeep, tagName)} chosen={d.mustKeep} onChange={(v) => set('mustKeep', v)} />
       </Field>
 
@@ -219,6 +224,9 @@ function Editor({ account, m, profile, opts, onDone }: { account: Account; m: Ma
           </div>
           <Field label="What matters most, in order">
             <PriorityRanker codes={d.priorities} choices={opts.priorities} onChange={(v) => set('priorities', v)} />
+          </Field>
+          <Field label="If two products are equally good, prefer ones that are" hint="Nothing is ruled out. A product that claims these ranks higher.">
+            <Chips items={withHeld(opts.prefer_tags, d.prefer ?? [], tagName)} chosen={d.prefer ?? []} onChange={(v) => set('prefer', v)} />
           </Field>
           <Field label="If two products are equally good, prefer" hint="Every pack size can still be ordered. This only breaks a tie.">
             <Chips single items={opts.pack_sizes} chosen={[d.packSize]} onChange={(v) => set('packSize', v[0])} />
