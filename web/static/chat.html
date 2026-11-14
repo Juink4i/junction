@@ -136,6 +136,7 @@
       run_start(e) {
         agentLabel = String(e.model ?? "").startsWith("scripted") ? "Buyer agent · scripted, no AI" : "Buyer agent · AI";
         add(div("meta-row", `${esc(e.buyer_name ?? e.buyer)} · buyer agent on ${esc(e.model)}${e.gullible ? ' · <span class="pill bad">demo: simulated compromised agent</span>' : ""}`));
+        if ((e.preferences ?? []).length) add(div("note", "Preferences in use, not rules: " + e.preferences.map(esc).join(" ")));
       },
       user(e) { add(div("row right buyer", `<div class="bubble"><div class="who">Buyer</div>${md(e.text)}</div>`)); },
       request(e) {

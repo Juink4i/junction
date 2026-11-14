@@ -10,7 +10,7 @@ from typing import Any
 
 from agent.config import Settings
 from agent.events import EventSink
-from agent.instructions import build_instruction
+from agent.instructions import build_instruction, preference_lines
 from agent.mcp_link import TradeLink
 from agent.tools import AskFn, Toolbox
 
@@ -70,7 +70,8 @@ def build_agent(settings: Settings, toolbox: Toolbox):
     from google.adk.agents import LlmAgent
     from google.genai import types
 
-    instruction = build_instruction(settings.buyer_name, settings.today, settings.gullible)
+    instruction = build_instruction(settings.buyer_name, settings.today, settings.gullible,
+                                    settings.profile)
     retry = types.HttpRetryOptions(attempts=5, initial_delay=2.0, max_delay=30.0,
                                    http_status_codes=[429, 500, 502, 503, 504])
     return LlmAgent(
@@ -95,7 +96,8 @@ async def run_buyer(request: str, settings: Settings, sink: EventSink,
     sink.add_secret(settings.mandate_token)
     model_name = settings.model if isinstance(settings.model, str) else getattr(settings.model, "model", "?")
     sink.publish("run_start", buyer_name=settings.buyer_name, model=model_name,
-                 request=request, gullible=settings.gullible)
+                 request=request, gullible=settings.gullible,
+                 preferences=preference_lines(settings.profile))
     sink.publish("user", text=request)
     result = RunResult()
 

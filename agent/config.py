@@ -6,6 +6,7 @@ server, so it is never read here, even though it sits in the same .env file.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from datetime import date
@@ -16,6 +17,8 @@ from dotenv import dotenv_values
 ROOT = Path(__file__).resolve().parent.parent
 # Runner 2's server/make_mandate.py writes server/mandates/<buyer>.jwt.
 MANDATE_DIRS = (ROOT / "server" / "mandates", ROOT / "data" / "mandates")
+# onboarding/enroll.py saves each signed-up kitchen's files in data/buyers/<buyer id>/.
+BUYERS_DIR = ROOT / "data" / "buyers"
 
 BUYERS = {
     "hotel": "Hotel Chain Oy / Helsinki Central",
@@ -39,16 +42,18 @@ class Settings:
     gullible: bool = False
     replies: list[str] = field(default_factory=list)
     today: date = field(default_factory=date.today)
+    profile: dict | None = None  # preferences from onboarding; never rules
 
     @property
     def buyer_name(self) -> str:
-        return BUYERS.get(self.buyer, self.buyer)
+        return BUYERS.get(self.buyer) or (self.profile or {}).get("name") or self.buyer
 
 
 def load_mandate(buyer: str, explicit: str | None = None) -> tuple[str, str]:
     """Return (token, where it came from).
 
-    Order: an explicit file, $MANDATE_TOKEN, server/mandates/<buyer>.jwt (from
+    Order: an explicit file, $MANDATE_TOKEN, data/buyers/<buyer>/mandate.jwt (a kitchen signed
+    up on the onboarding page), server/mandates/<buyer>.jwt (from
     `uv run python -m server.make_mandate`), data/mandates/<buyer>.*, and finally the fake
     server's demo token. The real server rejects the demo token, which is correct.
     """
@@ -56,12 +61,26 @@ def load_mandate(buyer: str, explicit: str | None = None) -> tuple[str, str]:
         return Path(explicit).read_text().strip(), explicit
     if os.environ.get("MANDATE_TOKEN"):
         return os.environ["MANDATE_TOKEN"].strip(), "$MANDATE_TOKEN"
+    onboarded = BUYERS_DIR / buyer / "mandate.jwt"
+    if onboarded.exists():
+        return onboarded.read_text().strip(), f"data/buyers/{buyer}/mandate.jwt"
     for folder in MANDATE_DIRS:
         for ext in ("jwt", "jws", "txt"):
             path = folder / f"{buyer}.{ext}"
             if path.exists():
                 return path.read_text().strip(), str(path.relative_to(ROOT))
     return f"demo-{buyer}", "demo token (fake server only)"
+
+
+def load_profile(buyer: str) -> dict | None:
+    """The preferences a kitchen gave at onboarding, or None for a buyer without a profile."""
+    path = BUYERS_DIR / buyer / "profile.json"
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def known_buyer(buyer: str) -> bool:
+    """A seeded demo buyer, or a kitchen that signed up on the onboarding page."""
+    return buyer in BUYERS or (BUYERS_DIR / buyer / "mandate.jwt").exists()
 
 
 def load_gemini_key(env_file: Path = ROOT / ".env") -> bool:
