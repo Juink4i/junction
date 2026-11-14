@@ -1,0 +1,25 @@
+# Runner 3: Bot and screens
+
+You own `agent/`, `web/` and `demo/`. Branch: `bot`. Do not edit `catalog/` or `server/`.
+
+## Goal
+
+A demo a judge can follow in two minutes: an AI buyer agent orders through the MCP server, a human approves on a phone-sized page, and a log page proves what happened.
+
+You call **Contract B** in `docs/runner-tasks.md` (six MCP tools plus HTTP endpoints). Your done-checklist is in the same file under "Prompts for each runner → Runner 3".
+
+## Context you need
+
+- One buyer agent, built with Google ADK and Gemini, connected to `http://localhost:8000/mcp`. It does two jobs: Shopper (parse, search, rank, quote, order) and Substitution (good / better / best replacements with a one-line trade-off).
+- Start against Runner 2's skeleton server. Don't wait for the real one.
+- The agent must handle all four `place_order` results: `confirmed`, `needs_clarification` (answer, or repeat with `confirm_unusual`), `pending_approval` (poll `get_approval_status`), `rejected` (explain, don't retry).
+- Tag and category filters still let wrong products through (coffee milk, latte drinks, sour milk). Dropping those is the agent's job.
+- Ranking: drop anything that breaks a hard rule, prefer one product covering the full amount, then lowest total price, then earliest delivery, then sustainability labels.
+- Screens: approval page (phone width), log page with a "Verify log" button, chat page showing messages and tool calls live. Plain HTML and JavaScript is enough.
+- Demo scenes are listed in `docs/valio-aimo-discussion.md`, section 5. The shortage and injection scenes are set up through `data/overrides.json`, which Runner 1 provides.
+- In the injection scene the agent is allowed to be fooled. The point is that the server blocks the order.
+
+## Don't
+
+- Don't write spending, allergen or delivery rules into the agent's instructions. The server enforces them.
+- Don't let the agent see or print any API key.
