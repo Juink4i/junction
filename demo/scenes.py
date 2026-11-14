@@ -70,8 +70,8 @@ def build_scenes(today: date | None = None) -> list[Scene]:
         Scene(
             key="c", title="4 · Shortage",
             subtitle="Next week the hotel orders again, but only 700 L of its usual milk is left. The "
-                     "agent buys those and fills the other 300 L with a substitute that is still "
-                     "lactose-free, as the hotel's mandate requires.",
+                     "server's first option is a split: those 700 L plus 300 L of the next product "
+                     "down its list, still lactose-free as the hotel's mandate requires.",
             buyer="hotel", request="Order 1,000 litres of lactose-free milk for Monday again, please.",
             plan=ShoppingRequest("lactose-free milk", 1000, "L", monday),
             overrides="shortage.json", hint="If an approval appears, tap Approve.", wait_s=180),

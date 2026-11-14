@@ -91,3 +91,33 @@ def test_a_product_short_on_stock_is_not_offered_alone():
     assert [o.lines[0].candidate.product_id for o in options(ranked, 1000, MONDAY)] == ["A"]
     assert milk("A", 1.56, available_units=1000).short is False
     assert milk("A", 1.56, available_units=999).short is True
+
+
+def test_a_short_first_choice_becomes_a_split_with_the_next_product():
+    ranked = rank([milk("A", 1.56, available_units=700), milk("B", 8.10, 5.0),
+                   milk("D", 16.20, 10.0)], MONDAY)
+    found = options(ranked, 1000, MONDAY)
+    assert [o.label for o in found] == ["split", "better", "good"]
+    assert [(l.candidate.product_id, l.units, l.covers) for l in found[0].lines] == [
+        ("A", 700, 700.0), ("B", 60, 300.0)]
+    assert found[0].total_eur == 1578.0
+    assert found[0].trade_off.startswith("700 × 1 L of Milk A (700 L) + 60 × 5 L of Milk B (300 L)")
+    assert "€42.00 more than the best option" in found[1].trade_off
+
+
+def test_the_split_walks_down_the_list_until_the_amount_is_covered():
+    ranked = rank([milk("A", 1.00, available_units=500), milk("B", 1.10, available_units=300),
+                   milk("C", 1.20)], MONDAY)
+    split, single = options(ranked, 1000, MONDAY)
+    assert [(l.candidate.product_id, l.units) for l in split.lines] == [("A", 500), ("B", 300), ("C", 200)]
+    assert single.lines[0].candidate.product_id == "C"
+
+
+def test_no_split_when_the_rest_cannot_be_covered():
+    ranked = rank([milk("A", 1.00, available_units=500), milk("B", 1.10, available_units=100)], MONDAY)
+    assert options(ranked, 1000, MONDAY) == []
+
+
+def test_only_a_short_first_choice_causes_a_split():
+    ranked = rank([milk("A", 1.00), milk("B", 1.10, available_units=100)], MONDAY)
+    assert [o.label for o in options(ranked, 1000, MONDAY)] == ["best"]

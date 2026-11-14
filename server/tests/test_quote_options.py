@@ -191,3 +191,17 @@ def test_an_existing_database_gets_the_new_columns(tmp_path):
     old.close()
     columns = {row["name"] for row in connect(path).execute("PRAGMA table_info(quotes)")}
     assert {"buyer_id", "set_id", "rank", "label"} <= columns
+
+
+def test_a_short_first_choice_is_offered_as_a_split(svc, hotel, catalog, tokens):
+    catalog.offer_changes["464201"] = {"available_units": 700}
+    result = quoted(svc, hotel)
+    split = result["options"][0]
+    assert split["label"] == "split"
+    assert [(l["product_id"], l["units"], l["covers"], l["stock"]) for l in split["quote"]["lines"]] == [
+        ("464201", 700, 700.0, "confirmed"), ("464179", 30, 300.0, "unconfirmed")]
+    assert split["quote"]["total_eur"] == 1578.0
+    assert [o["label"] for o in result["options"][1:]] == ["better", "good", "other"]
+    assert result["not_offered"] == []  # 464201 is part of the split, so it was not left out
+    placed = svc.place_order(split["quote"]["quote_id"], tokens["hotel"], "Split")
+    assert placed["status"] == "pending_approval"  # 1,578 is over the hotel's 1,500 limit

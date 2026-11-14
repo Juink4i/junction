@@ -124,6 +124,27 @@ def rank(candidates: list[Candidate], need_by: date, priorities: list[str] | Non
     return sorted(candidates, key=key)
 
 
+def _split(ranked: list[Candidate], amount: float) -> tuple[Line, ...] | None:
+    """All that is left of the first choice, then the rest from the next products down the list.
+
+    None when the list cannot cover the whole amount.
+    """
+    first = ranked[0]
+    if not first.available_units:
+        return None
+    lines = [Line(first, first.available_units)]
+    remaining = amount - first.available_units * first.content_per_unit
+    for c in ranked[1:]:
+        if remaining <= 1e-9:
+            break
+        wanted = math.ceil(remaining / c.content_per_unit - 1e-9)
+        take = wanted if c.available_units is None else min(wanted, c.available_units)
+        if take > 0:
+            lines.append(Line(c, take))
+            remaining -= take * c.content_per_unit
+    return tuple(lines) if remaining <= 1e-9 and len(lines) > 1 else None
+
+
 def _describe(lines: tuple[Line, ...], best_total: float | None, need_by: date) -> str:
     parts = []
     for line in lines:
@@ -146,9 +167,15 @@ def _describe(lines: tuple[Line, ...], best_total: float | None, need_by: date) 
 def options(ranked: list[Candidate], amount: float, need_by: date, limit: int = 5) -> list[Option]:
     """Up to `limit` orderable options, best first.
 
-    A product without enough confirmed stock is never offered on its own.
+    A product without enough confirmed stock is never offered on its own. When that product
+    is the first choice, the first option is a split: what is left of it plus the next
+    products down the list.
     """
     plans: list[tuple[str, tuple[Line, ...]]] = []
+    if ranked and ranked[0].short:
+        split = _split(ranked, amount)
+        if split:
+            plans.append(("split", split))
     for c in ranked:
         if not c.short:
             plans.append(("", (Line(c, c.units),)))

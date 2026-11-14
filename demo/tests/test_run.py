@@ -56,11 +56,12 @@ async def test_all_six_scenes(fake, tmp_path):
     first_order = next(e for e in sink.history if e["kind"] == "tool_call" and e["tool"] == "place_order")
     assert first_order["args"]["agent_signature"] == "[signed by the agent's key]"
 
-    # Scene c: only 700 L of the first choice is left, so the server leaves it out and says why.
+    # Scene c: only 700 L of the first choice is left, so the server's first option is a split:
+    # those 700 L plus 300 L of the next lactose-free milk down the list.
     priced = [e["result"] for e in sink.history
               if e["kind"] == "tool_result" and e["tool"] == "request_quote"]
-    assert any(n["product_id"] == "464201" and "700 L" in n["reason"]
-               for p in priced for n in p.get("not_offered", []))
+    splits = [o for p in priced for o in p.get("options", []) if o["label"] == "split"]
+    assert any(sorted(ln["covers"] for ln in o["quote"]["lines"]) == [300, 700] for o in splits)
 
     # Scene d: the fooled agent asked for 10x, and the server sent it to a person, who said no.
     held = [e for e in sink.history if e["kind"] == "decision" and e.get("status") == "pending_approval"]
