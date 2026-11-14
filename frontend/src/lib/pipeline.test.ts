@@ -118,6 +118,32 @@ describe('runView', () => {
     expect(v.steps.map((s) => s.state)).toEqual(['done', 'done', 'todo', 'todo'])
   })
 
+  it('marks the buyer’s answer as done, and a run that ends without an order as no order', () => {
+    const v = runView([
+      ev('run_start'),
+      ev('ask', { question: 'Shell or liquid eggs?' }),
+      ev('answer', { text: 'whole shell eggs, 200 eggs' }),
+      ev('tool_call', { tool: 'search_products' }),
+      ev('run_end'),
+    ])
+    expect(v.steps.map((s) => s.state)).toEqual(['done', 'todo', 'todo', 'done'])
+    expect(v.steps[3].detail).toBe('Buyer answered: “whole shell eggs, 200 eggs”')
+    expect(v.decision?.status).toBe('no_order')
+  })
+
+  it('stops an unanswered question when the run ends, but keeps a pending approval open', () => {
+    const unanswered = runView([ev('run_start'), ev('ask', { question: 'Shell or liquid?' }), ev('run_end')])
+    expect(unanswered.steps[3].state).toBe('stopped')
+    const waiting = runView([
+      ev('run_start'),
+      ev('tool_call', { tool: 'place_order' }),
+      ev('decision', { status: 'pending_approval', reasons: ['Over the limit.'] }),
+      ev('run_end'),
+    ])
+    expect(waiting.steps[3].state).toBe('active')
+    expect(waiting.decision?.status).toBe('pending_approval')
+  })
+
   it('shows a person rejecting as stopped and the run as rejected', () => {
     const v = runView([
       ev('run_start'),

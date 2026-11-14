@@ -183,6 +183,7 @@ export function runView(all: AgentEvent[]): RunView {
         personDetail = e.question ?? 'The agent asked the buyer.'
         break
       case 'answer':
+        person = 'done'
         personDetail = `Buyer answered: “${e.text ?? ''}”`
         break
       case 'waiting':
@@ -194,10 +195,12 @@ export function runView(all: AgentEvent[]): RunView {
         break
     }
   }
-  // Person is left alone: a run can end while an approval is still really pending.
   if (view.finished) {
     if (shop === 'active') shop = 'done'
     if (compare === 'active') compare = view.quote ? 'done' : 'stopped'
+    // A run can end while an approval is still really pending, so that stays open.
+    if (person === 'active' && view.decision?.status !== 'pending_approval') person = 'stopped'
+    if (!view.decision) view.decision = { status: 'no_order', reasons: [] }
   }
 
   view.steps = [
@@ -219,6 +222,7 @@ export function statusLabel(status: string): string {
       pending_approval: 'Pending approval',
       rejected: 'Rejected',
       withdrawn: 'Withdrawn',
+      no_order: 'No order placed',
       approved: 'Approved',
       pending: 'Pending',
     } as Record<string, string>

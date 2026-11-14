@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleHelp, Link2, Link2Off, OctagonX, Undo2, UserRound } from 'lucide-react'
+import { CheckCircle2, CircleHelp, CircleSlash, Link2, Link2Off, OctagonX, Undo2, UserRound } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { usePoll } from '@/lib/api'
 import { statusLabel } from '@/lib/pipeline'
@@ -12,6 +12,7 @@ const STYLE: Record<string, { icon: typeof CheckCircle2; cls: string }> = {
   pending: { icon: UserRound, cls: 'bg-wait-soft text-wait border-wait/25' },
   rejected: { icon: OctagonX, cls: 'bg-stop-soft text-stop border-stop/25' },
   withdrawn: { icon: Undo2, cls: 'bg-muted text-muted-foreground border-border' },
+  no_order: { icon: CircleSlash, cls: 'bg-muted text-muted-foreground border-border' },
 }
 const UNKNOWN = { icon: CircleHelp, cls: 'bg-muted text-muted-foreground border-border' }
 
