@@ -11,7 +11,7 @@ const opts = {
     { code: 'finnish', name: 'Finnish origin' },
     { code: 'sustainability', name: 'sustainability' },
   ],
-  pack_sizes: [{ code: 'small', name: 'small packs' }, { code: 'large', name: 'large packs' }],
+  pack_sizes: [{ code: 'small', name: 'smaller packs' }, { code: 'large', name: 'bigger packs' }],
 } as OnboardingOptions
 
 const mandate: Mandate = {
@@ -99,7 +99,7 @@ describe('mandate draft', () => {
     expect(c.prefs).toEqual({ priorities: ['finnish', 'price', 'reliability', 'sustainability'], pack_size: 'large' })
     expect(c.summary).toEqual([
       'Prefer Finnish origin, then the lowest price, then reliable delivery, then sustainability',
-      'Prefer large packs',
+      'If two products are equally good, prefer bigger packs',
     ])
   })
 })

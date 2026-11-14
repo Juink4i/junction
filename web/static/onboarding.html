@@ -97,7 +97,7 @@
         <section class="card"><h2>Delivery and rhythm</h2>
           <div class="field"><div class="lab">Days you can receive goods. None ticked means any day.</div>
             ${chips("day", opts.weekdays, a.delivery.days)}</div>
-          <div class="field"><div class="lab">Pack size</div>
+          <div class="field"><div class="lab">If two products are equally good, prefer (every pack size can still be ordered):</div>
             ${chips("pack", opts.pack_sizes, [a.delivery.pack_size], "radio")}</div>
           <div class="field"><div class="lab">Usual orders: what, how much, how often</div>
             <div id="usual"></div>

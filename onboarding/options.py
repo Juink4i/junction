@@ -16,7 +16,8 @@ WEEKDAYS = {"MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "Thurs
             "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday"}
 PRIORITIES = {"price": "the lowest price", "reliability": "reliable delivery",
               "finnish": "Finnish origin", "sustainability": "sustainability"}
-PACK_SIZES = {"small": "small packs", "large": "large packs"}
+# Only breaks a tie in the ranking; every pack size can still be ordered.
+PACK_SIZES = {"small": "smaller packs", "large": "bigger packs"}
 PERIODS = {"week": "week", "month": "month"}
 # A usual order may name its day: a weekday when it is weekly, a day of the month when monthly.
 MONTH_DAYS = list(range(1, 32))

@@ -241,5 +241,6 @@ def build(answers: dict[str, Any], buyer_id: str, today: date,
     say(RULE, f"Orders that need a person go to {approver}.")
     say(PREFERENCE, "When several products fit, prefer "
                     f"{', then '.join(PRIORITIES[p] for p in money['priorities'])}.")
-    say(PREFERENCE, f"Prefer {PACK_SIZES[pack]}.")
+    say(PREFERENCE, f"If two products are equally good, prefer {PACK_SIZES[pack]}. "
+                    "Every pack size can still be ordered.")
     return Built(mandate, profile, rows)

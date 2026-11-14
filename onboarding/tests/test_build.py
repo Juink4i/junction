@@ -148,7 +148,8 @@ def test_review_sentences_are_labelled_rule_or_preference():
     assert any("5 times the usual (40 L of lactose-free milk each week)" in r for r in rules)
     assert ("When several products fit, prefer the lowest price, then reliable delivery, then "
             "Finnish origin, then sustainability.") in preferences
-    assert "Prefer small packs." in preferences
+    assert ("If two products are equally good, prefer smaller packs. Every pack size can still "
+            "be ordered.") in preferences
     assert {s["kind"] for s in result.sentences} == {"rule", "preference"}
 
 

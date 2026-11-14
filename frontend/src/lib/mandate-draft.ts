@@ -161,7 +161,7 @@ export function changesOf(
   }
   if (profile && d.packSize && d.packSize !== profile.pack_size) {
     prefs.pack_size = d.packSize
-    summary.push(`Prefer ${nameIn(opts.pack_sizes, d.packSize)}`)
+    summary.push(`If two products are equally good, prefer ${nameIn(opts.pack_sizes, d.packSize)}`)
   }
   return { body, prefs, summary }
 }

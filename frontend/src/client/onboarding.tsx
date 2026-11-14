@@ -205,8 +205,9 @@ export default function Onboarding() {
           <Field label="Days you can receive goods. None ticked means any day.">
             <Chips items={opts.weekdays} chosen={a.delivery.days} onChange={(v) => update((d) => void (d.delivery.days = v))} />
           </Field>
-          <Field label="Pack size">
+          <Field label="If two products are equally good, prefer">
             <Chips single items={opts.pack_sizes} chosen={[a.delivery.pack_size]} onChange={(v) => update((d) => void (d.delivery.pack_size = v[0]))} />
+            <p className="text-xs text-muted-foreground">Every pack size can still be ordered. This only breaks a tie.</p>
           </Field>
           <Field label="Usual orders: what, how much, how often">
             <UsualOrders orders={a.usual_orders} opts={opts} onChange={(v) => update((d) => void (d.usual_orders = v))} />

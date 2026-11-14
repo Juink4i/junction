@@ -99,8 +99,8 @@ function Preferences({ profile, opts }: { profile: Profile; opts: OnboardingOpti
       <Rule icon={<Sparkles className="size-4" />} title="When several products fit, prefer">
         {profile.priorities.map((p) => nameIn(opts.priorities, p)).join(', then ')}.
       </Rule>
-      <Rule icon={<Package className="size-4" />} title="Pack size">
-        Prefer {nameIn(opts.pack_sizes, profile.pack_size)}.
+      <Rule icon={<Package className="size-4" />} title="If two products are equally good">
+        Prefer {nameIn(opts.pack_sizes, profile.pack_size)}. Every pack size can still be ordered.
       </Rule>
     </ul>
   )
@@ -226,7 +226,7 @@ function Editor({ account, m, profile, opts, onDone }: { account: Account; m: Ma
           <Field label="What matters most, in order">
             <PriorityRanker codes={d.priorities} choices={opts.priorities} onChange={(v) => set('priorities', v)} />
           </Field>
-          <Field label="Pack size">
+          <Field label="If two products are equally good, prefer" hint="Every pack size can still be ordered. This only breaks a tie.">
             <Chips single items={opts.pack_sizes} chosen={[d.packSize]} onChange={(v) => set('packSize', v[0])} />
           </Field>
         </div>
