@@ -11,6 +11,10 @@ uv run pytest server
 - `make_mandate` issues new buyer keys each run, so older tokens stop working.
 - Uses `catalog/api.py` when it exists, otherwise `server/fake_catalog.py` (made-up prices).
 
+## Unusual-order check
+
+`place_order` asks Google's Decisions API (`gemini-decision-1`, plain HTTPS, `GEMINI_API_KEY`) how likely the amount is to be unusual for this buyer. A score of 0.8 or more returns `needs_clarification`, the same as the 5× rule. The score can only add a question. If the API is down, slow (4 s timeout) or says "normal", the 5× rule still applies. Each score is logged as `unusual_score` by `gemini-decision-1`. Set `DECISIONS_API=off` to skip it.
+
 ## For the agent and the screens
 
 - Pass the contents of `server/mandates/<buyer>.jwt` as `mandate_token`.

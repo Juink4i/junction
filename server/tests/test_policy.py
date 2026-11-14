@@ -176,3 +176,57 @@ def test_missing_unknown_allergens_rule_is_treated_as_human():
     m = mandate("school")
     del m["hard_rules"]["unknown_allergens"]
     assert decide(quote(tomato), m, PRODUCTS, []).status == "pending_approval"
+
+
+# A product can list some allergens and say nothing about the rest.
+
+def milk_listing_only(contains, free_from=()):
+    return {"464201": replace(PRODUCTS["464201"], allergens_contains=list(contains),
+                              allergens_free_from=list(free_from), allergen_info_missing=False)}
+
+
+def test_blocked_allergen_the_product_says_nothing_about_needs_a_human():
+    products = milk_listing_only(["BM"], free_from=["AP"])
+    decision = decide(quote(), mandate("school"), products, [])
+    assert decision.status == "pending_approval"
+    assert any("AE, AN" in r and "unknown" in r.lower() for r in decision.reasons)
+
+
+def test_blocked_allergens_all_listed_as_free_from_is_confirmed():
+    products = milk_listing_only(["BM"], free_from=["AP", "AN", "AE"])
+    assert decide(quote(), mandate("school"), products, []).status == "confirmed"
+
+
+def test_blocked_allergen_the_product_says_nothing_about_is_rejected_when_mandate_says_reject():
+    products = milk_listing_only(["BM"])
+    decision = decide(quote(), mandate("school", unknown_allergens="reject"), products, [])
+    assert decision.status == "rejected"
+
+
+def test_unlisted_allergens_are_ignored_when_mandate_allows_unknown():
+    products = milk_listing_only(["BM"])
+    decision = decide(quote(), mandate("school", unknown_allergens="allow"), products, [])
+    assert decision.status == "confirmed"
+
+
+# The Decisions API score can only add a question, never remove one.
+
+AI_FLAG = "Google's Decisions API rates this order 97% likely to be unusual for this buyer."
+
+
+def test_ai_flag_alone_asks_the_agent():
+    decision = decide(quote(), mandate("cafe"), PRODUCTS, HISTORY, ai_unusual=AI_FLAG)
+    assert decision.status == "needs_clarification"
+    assert AI_FLAG in decision.reasons
+
+
+def test_ai_flag_confirmed_by_the_agent_goes_to_a_human():
+    decision = decide(quote(), mandate("cafe"), PRODUCTS, HISTORY, confirm_unusual=True,
+                      ai_unusual=AI_FLAG)
+    assert decision.status == "pending_approval"
+
+
+def test_ai_flag_does_not_soften_a_rejection():
+    tomato = line("460004", units=5, covers=5.0, unit_price=6.5, content_unit="KG")
+    decision = decide(quote(tomato), mandate("hotel"), PRODUCTS, [], ai_unusual=AI_FLAG)
+    assert decision.status == "rejected"

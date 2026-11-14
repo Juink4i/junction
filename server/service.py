@@ -14,6 +14,7 @@ from server import audit, signing
 from server.db import transaction
 from server.mandate import MandateError, verify_mandate
 from server.policy import decide, eur
+from server.unusual import MODEL, REASON_PREFIX, THRESHOLD, flag_reason
 
 QUOTE_TTL = timedelta(minutes=15)
 SUMMARY_FIELDS = ("id", "name_en", "name_fi", "category", "sales_unit", "tags", "labels")
@@ -51,8 +52,10 @@ def locked(method):
 
 
 class Service:
-    def __init__(self, conn: sqlite3.Connection, catalog: Any, now: Callable[[], datetime]):
+    def __init__(self, conn: sqlite3.Connection, catalog: Any, now: Callable[[], datetime],
+                 unusual_scorer: Any = None):
         self.conn = conn
+        self.unusual_scorer = unusual_scorer
         self.catalog = catalog
         self.now = now
         self.key = signing.server_key(conn)
@@ -98,13 +101,22 @@ class Service:
             self._log(actor, "request_quote", f"No quote given: {result['message']}")
         return result
 
-    def _offers(self, product_ids: list[str], need_by: date) -> dict | None:
-        for _ in range(2):
+    def _offers(self, product_ids: list[str], need_by: date) -> dict | dict[str, Any]:
+        """The offers, or an error. The real catalog already retries once, so only the fake needs it."""
+        attempts = 1 if hasattr(self.catalog, "allergen_status") else 2
+        failure: Exception | None = None
+        for _ in range(attempts):
             try:
                 return self.catalog.price_and_availability(product_ids, need_by)
-            except Exception:
-                continue
-        return None
+            except Exception as e:
+                failure = e
+        # The catalog's message can include upstream details, so it never reaches the agent.
+        retryable = getattr(failure, "retryable", True)
+        message = ("Valio Aimo's price and availability service did not answer. Try again shortly."
+                   if retryable else
+                   "Valio Aimo's price and availability service cannot be reached from this server. "
+                   "Retrying will not help; the operator must fix the setup.")
+        return error("valio_api_unavailable", message, retryable=retryable)
 
     def _substitute_hint(self, product: Any, need_by: date) -> str:
         try:
@@ -114,9 +126,12 @@ class Service:
         options = []
         for offer in offers[:3]:
             substitute = self.catalog.get_product(offer.product_id)
-            if substitute is not None:
-                options.append(f"{offer.product_id} {substitute.name_en} "
-                               f"({eur(offer.comparison_price_eur)} per {offer.comparison_unit})")
+            if substitute is None:
+                continue
+            price = (f"{eur(offer.comparison_price_eur)} per {offer.comparison_unit}"
+                     if offer.comparison_price_eur is not None else
+                     f"{eur(offer.unit_price_eur)} per sales unit")
+            options.append(f"{offer.product_id} {substitute.name_en} ({price})")
         if not options:
             return " No substitute with the same tags can arrive on time."
         return " Substitutes with the same tags that can arrive on time: " + "; ".join(options) + "."
@@ -146,9 +161,8 @@ class Service:
                              "Use the other unit (L or KG).")
 
         offers = self._offers([product.id for product, _ in plans], need_by)
-        if offers is None:
-            return error("valio_api_unavailable", "Valio Aimo's price and availability service did "
-                         "not answer after one retry. Try again shortly.", retryable=True)
+        if "code" in offers and "retryable" in offers:
+            return offers
 
         quote_lines, total_with_tax = [], 0.0
         for product, plan in plans:
@@ -256,8 +270,14 @@ class Service:
         products = {pid: p for pid, p in products.items() if p is not None}
         history = [dict(row) for row in self.conn.execute(
             "SELECT category, amount, content_unit FROM order_history WHERE buyer_id = ?", (buyer_id,))]
+        if existing is not None:
+            # The agent is confirming an amount it was asked about. Keep the flag, don't re-score.
+            ai_unusual = next((r for r in json.loads(existing["reasons_json"])
+                               if r.startswith(REASON_PREFIX)), None)
+        else:
+            ai_unusual = self._ai_unusual(mandate["buyer"], history, quote, products, quote_id)
         decision = decide({**quote, "need_by": need_by.isoformat()}, mandate, products, history,
-                          confirm_unusual)
+                          confirm_unusual, ai_unusual)
 
         order_id = existing["order_id"] if existing else _new_id("ord")
         approval_id = _new_id("apr") if decision.status == "pending_approval" else None
@@ -280,6 +300,25 @@ class Service:
         self._log("policy", f"decision:{decision.status}", " ".join(decision.reasons),
                   order_id=order_id, quote_id=quote_id)
         return self._order_result(self._order(order_id=order_id))
+
+    def _ai_unusual(self, buyer: str, history: list[dict], quote: dict, products: dict,
+                    quote_id: str) -> str | None:
+        if self.unusual_scorer is None or not history:
+            return None
+        lines = [{**l, "category": products[l["product_id"]].category}
+                 for l in quote["lines"] if l["product_id"] in products]
+        try:
+            score = self.unusual_scorer.score(buyer, history, lines)
+        except Exception:
+            score = None
+        if score is None:
+            self._log(MODEL, "unusual_score", "No score from Google's Decisions API. The 5 times "
+                      "rule still applies on its own.", quote_id=quote_id)
+            return None
+        verdict = "unusual, so the agent is asked" if score >= THRESHOLD else "not unusual"
+        self._log(MODEL, "unusual_score", f"Scored {score:.2f} that this amount is unusual for "
+                  f"{buyer}: {verdict}. The 5 times rule also applies.", quote_id=quote_id)
+        return flag_reason(score) if score >= THRESHOLD else None
 
     # Approvals
 

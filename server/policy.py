@@ -17,6 +17,13 @@ def eur(amount: float) -> str:
     return f"€{amount:,.2f}"
 
 
+def _unknown_blocked(product, blocked: set[str]) -> list[str]:
+    """Blocked allergens the product neither lists nor declares free from. Unknown is not safe."""
+    listed = {a.upper() for a in product.allergens_contains + product.allergens_may_contain
+              + product.allergens_free_from}
+    return sorted(blocked - listed)
+
+
 def _hard_stops(quote: dict, mandate: dict, products: dict) -> list[str]:
     allowed = mandate["auto_approve"].get("allowed_categories")
     rules = mandate["hard_rules"]
@@ -38,8 +45,13 @@ def _hard_stops(quote: dict, mandate: dict, products: dict) -> list[str]:
             reasons.append(f"{line['name']} contains an allergen the mandate blocks: {', '.join(contains)}.")
         if may_contain:
             reasons.append(f"{line['name']} may contain an allergen the mandate blocks: {', '.join(may_contain)}.")
-        if product.allergen_info_missing and rules.get("unknown_allergens") == "reject":
-            reasons.append(f"{line['name']} has no allergen information, and the mandate rejects such products.")
+        unknown = _unknown_blocked(product, blocked)
+        if rules.get("unknown_allergens") == "reject":
+            if product.allergen_info_missing:
+                reasons.append(f"{line['name']} has no allergen information, and the mandate rejects such products.")
+            elif unknown:
+                reasons.append(f"Whether {line['name']} contains {', '.join(unknown)} is unknown, "
+                               "and the mandate rejects such products.")
     return reasons
 
 
@@ -92,9 +104,15 @@ def _needs_human(quote: dict, mandate: dict, products: dict) -> list[str]:
         elif line["available_date"] > quote["need_by"]:
             reasons.append(f"{line['name']} would arrive on {line['available_date']}, "
                            f"after the need-by date {quote['need_by']}.")
-        if product.allergen_info_missing and rules.get("unknown_allergens", "human") == "human":
-            reasons.append(f"{line['name']} has no allergen information. Unknown is not treated "
-                           "as safe, so a person must check it.")
+        if rules.get("unknown_allergens", "human") == "human":
+            unknown = _unknown_blocked(product, {c.upper() for c in rules.get("blocked_allergens", [])})
+            if product.allergen_info_missing:
+                reasons.append(f"{line['name']} has no allergen information. Unknown is not treated "
+                               "as safe, so a person must check it.")
+            elif unknown:
+                reasons.append(f"The product data does not say whether {line['name']} contains "
+                               f"{', '.join(unknown)}, which the mandate blocks. Unknown is not "
+                               "treated as safe, so a person must check it.")
         missing_tags = [t for t in must_keep if t not in product.tags]
         if missing_tags:
             reasons.append(f"{line['name']} does not have the tag the mandate requires: "
@@ -103,13 +121,16 @@ def _needs_human(quote: dict, mandate: dict, products: dict) -> list[str]:
 
 
 def decide(quote: dict, mandate: dict, products: dict, history: list[dict],
-           confirm_unusual: bool = False) -> Decision:
-    """quote is a verified quote plus its need_by date; mandate is already verified."""
+           confirm_unusual: bool = False, ai_unusual: str | None = None) -> Decision:
+    """quote is a verified quote plus its need_by date; mandate is already verified.
+
+    ai_unusual is an optional reason from an outside scorer. It can only add a question.
+    """
     stops = _hard_stops(quote, mandate, products)
     if stops:
         return Decision("rejected", stops)
 
-    unusual = _unusual(quote, products, history)
+    unusual = _unusual(quote, products, history) + ([ai_unusual] if ai_unusual else [])
     if unusual and not confirm_unusual:
         return Decision(
             "needs_clarification", unusual,
