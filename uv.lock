@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.12.*"
 
 [[package]]
@@ -459,6 +459,7 @@ dependencies = [
     { name = "google-adk" },
     { name = "httpx" },
     { name = "mcp", extra = ["cli"] },
+    { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "python-dotenv" },
     { name = "starlette" },
@@ -476,6 +477,7 @@ requires-dist = [
     { name = "google-adk", specifier = ">=2.14.1" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "mcp", extras = ["cli"], specifier = ">=2.3.0" },
+    { name = "pydantic", specifier = ">=2.7" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.9" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
     { name = "starlette", specifier = ">=1.10.0" },

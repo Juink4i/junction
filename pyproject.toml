@@ -8,6 +8,7 @@ dependencies = [
     "google-adk>=2.14.1",
     "httpx>=0.28.1",
     "mcp[cli]>=2.3.0",
+    "pydantic>=2.7",
     "pyjwt[crypto]>=2.9",
     "python-dotenv>=1.2.4",
     "starlette>=1.10.0",
