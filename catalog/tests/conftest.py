@@ -27,10 +27,20 @@ def overrides_file(tmp_path) -> Path:
     return path
 
 
+class NoNetwork:
+    """Stands in for the API client in tests that must not price anything."""
+
+    def offers(self, *a, **k):
+        raise AssertionError("this test must not call the Valio Aimo API")
+
+    def cached_price(self, *a, **k):
+        return None
+
+
 @pytest.fixture
 def catalog(catalog_db, overrides_file):
-    """The catalog API pointed at the test database, an empty overrides file and no API client."""
-    api.configure(db_path=catalog_db, overrides_path=overrides_file, client=None)
+    """The catalog API pointed at the test database, an empty overrides file and no API access."""
+    api.configure(db_path=catalog_db, overrides_path=overrides_file, client=NoNetwork())
     yield api
     api.configure()
 

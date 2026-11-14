@@ -7,14 +7,16 @@ the Valio Aimo API, for a shortlist only, through catalog.valio_client.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 from datetime import date
 from pathlib import Path
 from typing import Literal
 
+from catalog import units
 from catalog.load import DB_PATH
-from catalog.models import Offer, Product, ProductSummary
+from catalog.models import Offer, Product, ProductSummary, UnitPlan
 from catalog.overrides import Overrides
 
 AllergenStatus = Literal["contains", "may_contain", "free_from", "unknown"]
@@ -122,6 +124,46 @@ def price_and_availability(product_ids: list[str], delivery_date: date) -> dict[
     """
     offers = _client().offers(product_ids, delivery_date)
     return {pid: _state.overrides.offer(o, pid) for pid, o in offers.items()}
+
+
+def units_needed(product_id: str, amount: float, unit: str) -> UnitPlan:
+    """How many sales units cover `amount` litres or kilos. Always rounds up.
+
+    Uses the product file when it gives a clean volume/weight. Otherwise uses Valio Aimo's own
+    unit price / comparison price (one cached price call, any date: pack size doesn't change).
+    Raises UnitMismatch when the product is measured in the other unit; no density guessing.
+    """
+    unit = unit.upper()
+    if unit not in ("L", "KG"):
+        raise ValueError(f"unit must be 'L' or 'KG', not {unit!r}")
+    if not amount or amount <= 0:
+        raise ValueError("amount must be positive")
+    r = _row(product_id)
+    if r is None:
+        raise KeyError(product_id)
+
+    content = units.content_from_product(r).get(unit)
+    price = _state.client.cached_price(r["id"]) if _state.client else None
+    if content is None or price is not None:
+        if price is None:
+            _client().offers([r["id"]], date.today())
+            price = _client().cached_price(r["id"])
+        if price and price.get("comparisonPrice") and price.get("comparisonUnit"):
+            if price["comparisonUnit"] != unit and content is None:
+                raise units.UnitMismatch(
+                    f"{r['id']} is priced per {price['comparisonUnit']}, not per {unit}")
+            if price["comparisonUnit"] == unit:
+                from_prices = units.content_from_prices(
+                    price["catalogPrice"]["value"], price["comparisonPrice"]["value"])
+                # Valio Aimo's own price per litre/kilo wins when the supplier data disagrees.
+                if content is None or abs(content - from_prices) > 0.02 * from_prices:
+                    content = from_prices
+    if content is None:
+        raise units.UnitMismatch(f"{r['id']}: no {unit} size in product data or prices")
+
+    n = math.ceil(amount / content - 1e-9)
+    return UnitPlan(product_id=r["id"], sales_unit=r["sales_unit"], content_per_unit=content,
+                    content_unit=unit, units=n, covers=round(n * content, 4))
 
 
 def allergen_status(product_id: str, allergen_code: str) -> AllergenStatus:
