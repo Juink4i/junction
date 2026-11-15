@@ -20,6 +20,9 @@ if [[ ! -f server/mandates/hotel.jwt ]]; then
 fi
 
 python -m server &
+TRADE_PID=$!
 python -m web --port "$PORT" --trade "$TRADE_HTTP_URL" &
-wait -n
+WEB_PID=$!
+trap 'kill $TRADE_PID $WEB_PID 2>/dev/null' EXIT
+while kill -0 "$TRADE_PID" 2>/dev/null && kill -0 "$WEB_PID" 2>/dev/null; do sleep 2; done
 exit 1
