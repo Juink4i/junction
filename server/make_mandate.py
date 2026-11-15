@@ -37,7 +37,7 @@ DEMO_MANDATES = {
         "buyer": "Hotel Chain Oy / Helsinki Central",
         "agent_id": "buyer-agent-01",
         "valid_until": "2026-12-31",
-        "auto_approve": {"max_order_eur": 1500, "max_line_eur": 800, "allowed_categories": ["10400"]},
+        "auto_approve": {"max_order_eur": 1500, "max_line_eur": 800},
         "substitution": {"allowed": True, "must_keep": ["FREE_FROM_LACTOSE"], "max_price_increase_pct": 10},
         "hard_rules": {"blocked_allergens": [], "unknown_allergens": "human", "no_delivery_after": "need_by_date"},
         "approvers": ["procurement.manager@hotel.example"],
@@ -47,12 +47,11 @@ DEMO_MANDATES = {
         "buyer": "Café Kallio",
         "agent_id": "buyer-agent-02",
         "valid_until": "2026-12-31",
-        "auto_approve": {"max_order_eur": 500, "max_line_eur": 400, "allowed_categories": ["10400"]},
+        "auto_approve": {"max_order_eur": 500, "max_line_eur": 400},
         "substitution": {"allowed": True, "must_keep": [], "max_price_increase_pct": 15},
         "hard_rules": {"blocked_allergens": [], "unknown_allergens": "human", "no_delivery_after": "need_by_date"},
         "approvers": ["owner@cafe.example"],
     },
-    # No allowed_categories: the school kitchen may buy from any category.
     "school": {
         "mandate_id": "mnd_school_espoo_001",
         "buyer": "Espoo School Kitchens",

@@ -45,9 +45,11 @@ function Rules({ m, profile, opts }: { m: Mandate; profile: Profile | null; opts
       <Rule icon={<Wallet className="size-4" />} title="Budget">
         {m.budget ? `${eur(m.budget.max_eur)} per ${m.budget.period}. Going over comes to you.` : 'No budget limit.'}
       </Rule>
-      <Rule icon={<Tags className="size-4" />} title="Allowed categories">
-        {m.auto_approve.allowed_categories?.length ? m.auto_approve.allowed_categories.map(categoryName).join(', ') : 'Any category.'}
-      </Rule>
+      {!!m.auto_approve.allowed_categories?.length && (
+        <Rule icon={<Tags className="size-4" />} title="Allowed categories">
+          {m.auto_approve.allowed_categories.map(categoryName).join(', ')}
+        </Rule>
+      )}
       {m.substitution.must_keep.length > 0 && (
         <Rule icon={<BadgeCheck className="size-4" />} title="Every product must be">
           <TagChips tags={m.substitution.must_keep} />
@@ -173,10 +175,6 @@ function Editor({ account, m, profile, opts, onDone }: { account: Account; m: Ma
 
       <Field label="Days you can receive goods" hint="None picked means any day.">
         <Chips items={opts.weekdays} chosen={d.days} onChange={(v) => set('days', v)} />
-      </Field>
-
-      <Field label="What the agent may buy" hint="None picked means any category.">
-        <Chips items={withHeld(opts.categories, d.categories, categoryName)} chosen={d.categories} onChange={(v) => set('categories', v)} />
       </Field>
 
       <div className="space-y-3 rounded-lg border p-4">

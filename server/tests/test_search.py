@@ -6,7 +6,7 @@ import pytest
 
 from server import fake_catalog
 from server.db import connect
-from server.make_mandate import issue_demo_mandates
+from server.make_mandate import DEMO_MANDATES, issue_demo_mandates
 from server.seller import KeywordSeller, Need, Screening, Verdict, keyword_verdict
 from server.service import Service
 from server.tests.test_register import Clock
@@ -35,7 +35,7 @@ def tokens(svc):
 
 
 @pytest.fixture
-def hotel(svc, tokens):  # milk only, every product must be lactose-free
+def hotel(svc, tokens):  # every product must be lactose-free
     return svc.authenticate(tokens["hotel"])
 
 
@@ -61,11 +61,16 @@ def test_search_keeps_what_fits_and_says_what_was_dropped(svc, hotel):
     assert "hint" not in found
 
 
-def test_the_mandates_must_haves_and_categories_always_apply(svc, hotel):
+def test_the_mandates_must_haves_always_apply(svc, hotel):
     found = svc.search_products(hotel, "milk")  # the buyer did not say lactose-free
     assert found["understood"] == {"product": "milk", "must_have": [], "from_mandate": ["lactose-free"]}
     assert ids(found) == ["464201", "465039", "463038", "464179"]
-    assert ids(svc.search_products(hotel, "tomato")) == []  # category 20100 is not in the mandate
+
+
+def test_the_mandates_categories_always_apply(svc, monkeypatch):
+    monkeypatch.setitem(DEMO_MANDATES["school"]["auto_approve"], "allowed_categories", ["10400"])
+    school = svc.authenticate(issue_demo_mandates(svc.conn)["school"])
+    assert ids(svc.search_products(school, "tomato")) == []  # category 20100 is not in the mandate
 
 
 def test_a_buyer_without_category_rules_searches_everything(svc, school):

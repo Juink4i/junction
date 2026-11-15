@@ -41,8 +41,11 @@ def test_every_product_must_be_becomes_must_keep():
 
 
 def test_categories_are_limited_only_when_some_are_chosen():
-    assert built().mandate["auto_approve"]["allowed_categories"] == ["10400"]
-    assert "allowed_categories" not in built(template("school")).mandate["auto_approve"]
+    for kind in ("daycare", "school", "hotel", "cafe"):
+        assert "allowed_categories" not in built(template(kind)).mandate["auto_approve"]
+    answers = template("hotel")
+    answers["money"]["allowed_categories"] = ["10400"]
+    assert built(answers).mandate["auto_approve"]["allowed_categories"] == ["10400"]
 
 
 def test_per_order_amount_becomes_max_order_eur():
@@ -178,7 +181,8 @@ def test_template_returns_a_fresh_copy():
     (lambda a: a["money"].update(allowed_categories=["99999"]), "99999"),
     (lambda a: a["delivery"].update(days=["FUNDAY"]), "FUNDAY"),
     (lambda a: a["usual_orders"][0].update(amount=0), "amount above zero"),
-    (lambda a: a["usual_orders"][0].update(category="10401"), "may not buy"),
+    (lambda a: (a["money"].update(allowed_categories=["10400"]),
+                a["usual_orders"][0].update(category="10401")), "may not buy"),
 ])
 def test_each_problem_is_reported_in_plain_language(change, fragment):
     answers = template("daycare")

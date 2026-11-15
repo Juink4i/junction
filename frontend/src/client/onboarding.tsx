@@ -152,9 +152,6 @@ export default function Onboarding() {
         </Section>
 
         <Section title="Money">
-          <Field label="What the agent may buy. None ticked means anything.">
-            <Chips items={opts.categories} chosen={a.money.allowed_categories} onChange={(v) => update((d) => void (d.money.allowed_categories = v))} />
-          </Field>
           <Field label="The agent may spend alone, per order, in euros" htmlFor="max_order">
             <Input
               id="max_order"

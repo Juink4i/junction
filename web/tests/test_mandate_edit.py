@@ -33,8 +33,7 @@ def test_put_changes_the_limit_and_signs_a_new_version(client, world):
     account = res.json()
     assert set(account) == {"buyer_id", "name", "mandate", "mandate_verified", "mandate_problem"}
     assert account["mandate_verified"] is True
-    assert account["mandate"]["auto_approve"] == {"max_order_eur": 600, "max_line_eur": 400,
-                                                  "allowed_categories": ["10400"]}
+    assert account["mandate"]["auto_approve"] == {"max_order_eur": 600, "max_line_eur": 400}
     assert account["mandate"]["mandate_id"] == "mnd_cafe_kallio_002"
     assert account["mandate"]["issued_at"]
 
@@ -313,7 +312,7 @@ def _usual(**change) -> dict:
     (_usual(on="XYZ"), "pick a day of the week"),
     (_usual(every="month", on=40), "1 to 31"),
     (_usual(category="99999"), "unknown category"),
-    (_usual(category="10401"), "may not buy"),
+    ({**_usual(category="10401"), "auto_approve": {"allowed_categories": ["10400"]}}, "may not buy"),
     ({"auto_approve": {"allowed_categories": ["10401"]}}, "may not buy"),
 ])
 def test_rejects_bad_usual_orders(client, world, body, words):

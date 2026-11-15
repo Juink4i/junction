@@ -195,5 +195,5 @@ def test_signed_mandate_without_optional_parts_is_accepted(conn):
     conn.execute("INSERT INTO buyers (buyer_id, name, public_pem) VALUES ('min', 'Min', ?)",
                  (signing.public_pem(key.public_key()),))
     mandate = copy.deepcopy(DEMO_MANDATES["hotel"])
-    del mandate["substitution"], mandate["approvers"], mandate["auto_approve"]["allowed_categories"]
+    del mandate["substitution"], mandate["approvers"]
     assert verify_mandate(signing.sign(mandate, key, kid="min"), conn, TODAY)[1] == mandate

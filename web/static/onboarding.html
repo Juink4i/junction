@@ -83,8 +83,6 @@
             ${chips("must_be", opts.tags, a.safety.must_be)}</div>
         </section>
         <section class="card"><h2>Money</h2>
-          <div class="field"><div class="lab">What the agent may buy. None ticked means anything.</div>
-            ${chips("category", opts.categories, a.money.allowed_categories)}</div>
           <div class="field"><label class="lab" for="max_order">The agent may spend alone, per order, in euros</label>
             <input type="number" id="max_order" min="0" step="10" value="${esc(a.money.max_order_eur)}"></div>
           <div class="field"><div class="lab">Budget in euros. Leave empty for none.</div>
@@ -144,7 +142,6 @@
       a.safety.blocked_allergens = checked("allergen");
       a.safety.unknown_allergens = checked("unknown")[0] ?? "human";
       a.safety.must_be = checked("must_be");
-      a.money.allowed_categories = checked("category");
       a.money.max_order_eur = numberOrNull($("max_order").value);
       const budget = numberOrNull($("budget").value);
       a.money.budget = budget === null ? null : { period: $("budget_period").value, max_eur: budget };

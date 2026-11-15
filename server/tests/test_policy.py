@@ -106,7 +106,9 @@ def test_blocked_allergen_wins_over_reasons_for_approval():
 
 def test_category_the_mandate_does_not_allow_is_rejected():
     tomato = line("460004", units=5, covers=5.0, unit_price=6.5, content_unit="KG")
-    decision = decide(quote(tomato), mandate("hotel"), PRODUCTS, [])
+    milk_only = mandate("hotel")
+    milk_only["auto_approve"]["allowed_categories"] = ["10400"]
+    decision = decide(quote(tomato), milk_only, PRODUCTS, [])
     assert decision.status == "rejected"
     assert any("20100" in r for r in decision.reasons)
 
@@ -213,7 +215,9 @@ def test_ai_flag_alone_needs_a_human():
 
 def test_ai_flag_does_not_soften_a_rejection():
     tomato = line("460004", units=5, covers=5.0, unit_price=6.5, content_unit="KG")
-    decision = decide(quote(tomato), mandate("hotel"), PRODUCTS, [], ai_unusual=AI_FLAG)
+    milk_only = mandate("hotel")
+    milk_only["auto_approve"]["allowed_categories"] = ["10400"]
+    decision = decide(quote(tomato), milk_only, PRODUCTS, [], ai_unusual=AI_FLAG)
     assert decision.status == "rejected"
 
 

@@ -9,7 +9,7 @@ from catalog import api, load
 from catalog.tests.fake_valio import FakeClock, FakeValio
 from catalog.valio_client import ValioClient
 from server.db import connect
-from server.make_mandate import issue_demo_mandates
+from server.make_mandate import DEMO_MANDATES, issue_demo_mandates
 from server.service import Service
 
 RAW = load.ROOT / "data" / "raw"
@@ -45,7 +45,8 @@ def quote(svc, product_id, litres):
     return svc.quote_lines([{"product_id": product_id, "amount": litres, "unit": "L"}], MONDAY)
 
 
-def test_search_screens_the_real_lactose_free_milks(svc):
+def test_search_screens_the_real_lactose_free_milks(svc, monkeypatch):
+    monkeypatch.setitem(DEMO_MANDATES["hotel"]["auto_approve"], "allowed_categories", ["10400"])
     hotel = svc.authenticate(issue_demo_mandates(svc.conn)["hotel"])
     found = svc.search_products(hotel, "lactose-free milk", amount=1000, unit="L")
     assert found["total_matches"] == 34
