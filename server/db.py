@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS log (
 ADDED_COLUMNS = {
     "quotes": (("buyer_id", "TEXT"), ("set_id", "TEXT"), ("rank", "INTEGER"), ("label", "TEXT")),
     "orders": (("alternatives_json", "TEXT"),),
+    "buyers": (("mandate_id", "TEXT"),),
 }
 
 

@@ -85,12 +85,14 @@ def seed_demo_customers(conn: sqlite3.Connection) -> None:
         "enrolment_code = excluded.enrolment_code", DEMO_CUSTOMERS)
 
 
-def _register(conn: sqlite3.Connection, buyer_id: str, name: str, key: Ed25519PrivateKey) -> None:
-    """The buyer's public key and its made-up order history."""
+def _register(conn: sqlite3.Connection, buyer_id: str, name: str, key: Ed25519PrivateKey,
+              mandate_id: str) -> None:
+    """The buyer's public key, its current mandate id and its made-up order history."""
     conn.execute(
-        "INSERT INTO buyers (buyer_id, name, public_pem) VALUES (?, ?, ?) "
-        "ON CONFLICT (buyer_id) DO UPDATE SET name = excluded.name, public_pem = excluded.public_pem",
-        (buyer_id, name, signing.public_pem(key.public_key())),
+        "INSERT INTO buyers (buyer_id, name, public_pem, mandate_id) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT (buyer_id) DO UPDATE SET name = excluded.name, public_pem = excluded.public_pem, "
+        "mandate_id = excluded.mandate_id",
+        (buyer_id, name, signing.public_pem(key.public_key()), mandate_id),
     )
     conn.execute("DELETE FROM order_history WHERE buyer_id = ?", (buyer_id,))
     conn.executemany(
@@ -107,7 +109,7 @@ def issue_demo_mandates(conn: sqlite3.Connection) -> dict[str, str]:
     tokens = {}
     for buyer_id, mandate in DEMO_MANDATES.items():
         key = signing.generate_key()
-        _register(conn, buyer_id, mandate["buyer"], key)
+        _register(conn, buyer_id, mandate["buyer"], key, mandate["mandate_id"])
         tokens[buyer_id] = signing.sign(mandate, key, kid=buyer_id)
     return tokens
 
@@ -156,7 +158,7 @@ def refresh_demo_buyers(conn: sqlite3.Connection, mandate_dir: Path = MANDATE_DI
             mandate = copy.deepcopy(demo)
         mandate["agent_key"] = ensure_agent_key(buyer_id, Path(buyers_dir))
         key = _kitchen_key(Path(buyer_keys_dir) / f"{buyer_id}.pem")
-        _register(conn, buyer_id, mandate.get("buyer") or demo["buyer"], key)
+        _register(conn, buyer_id, mandate.get("buyer") or demo["buyer"], key, mandate["mandate_id"])
         tokens[buyer_id] = signing.sign(mandate, key, kid=buyer_id)
         path.write_text(tokens[buyer_id])
     return tokens
