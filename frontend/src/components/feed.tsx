@@ -244,6 +244,11 @@ export function EventRow({ e, big }: { e: AgentEvent; big?: boolean }) {
   }
 }
 
+/** A run's summary is its agent's last message, which the feed already showed when it was said. */
+export function repeatsAgent(e: AgentEvent, events: AgentEvent[]): boolean {
+  return e.kind === 'run_end' && events.some((a) => a.kind === 'agent' && a.run_id === e.run_id && a.text === e.summary)
+}
+
 /** Auto-scrolling feed with a "jump to latest" pill when the reader scrolls up. */
 export function EventFeed({ events, big, className, emptyText }: { events: AgentEvent[]; big?: boolean; className?: string; emptyText?: string }) {
   const box = useRef<HTMLDivElement>(null)
@@ -262,7 +267,7 @@ export function EventFeed({ events, big, className, emptyText }: { events: Agent
     <div className={cn('relative min-h-0', className)}>
       <div ref={box} onScroll={onScroll} className="h-full space-y-3 overflow-y-auto p-4" aria-live="polite">
         {events.length === 0 && <div className="py-10 text-center text-sm text-muted-foreground">{emptyText ?? 'Nothing yet.'}</div>}
-        {events.map((e) => (
+        {events.filter((e) => !repeatsAgent(e, events)).map((e) => (
           <div key={e.id} className="animate-in fade-in-0 slide-in-from-bottom-1 duration-300">
             <EventRow e={e} big={big} />
             {e.ts && e.kind !== 'scene' && e.kind !== 'tool_result' && (

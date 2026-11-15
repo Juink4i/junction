@@ -1,7 +1,7 @@
 import { ArrowDown, Bot, Building2, Hourglass, Loader2, Send, UserRound } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router'
-import { Alternatives } from '@/components/feed'
+import { Alternatives, repeatsAgent } from '@/components/feed'
 import { StatusBadge } from '@/components/status'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -112,7 +112,7 @@ export function toChat(events: AgentEvent[]): Msg[] {
         })
         break
       case 'run_end':
-        if (e.summary) out.push({ id: e.id, side: 'left', who: 'Your agent', icon: 'agent', time: e.ts, body: e.summary })
+        if (e.summary && !repeatsAgent(e, events)) out.push({ id: e.id, side: 'left', who: 'Your agent', icon: 'agent', time: e.ts, body: e.summary })
         break
     }
   }

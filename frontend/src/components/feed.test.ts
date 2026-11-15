@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { argsSummary, resultSummary } from './feed'
+import { argsSummary, repeatsAgent, resultSummary } from './feed'
 
 describe('tool call lines in the feed', () => {
   it('summarises the plain-word search and the quote request', () => {
@@ -16,5 +16,19 @@ describe('tool call lines in the feed', () => {
       .toBe('2 signed options · best €1,010.00')
     expect(resultSummary('request_quote', { status: 'ok', options: [] })).toBe('nothing could be offered')
     expect(resultSummary('search_products', { status: 'needs_clarification', question: 'Which milk?' })).toBe('asks: Which milk?')
+  })
+})
+
+describe('the run summary', () => {
+  const ev = (id: number, kind: string, extra = {}) => ({ id, kind, run_id: 'r1', ts: '2026-11-15T06:56:26Z', ...extra })
+
+  it('is a repeat when the agent already said it in the same run', () => {
+    const events = [ev(1, 'agent', { text: 'Done.' }), ev(2, 'run_end', { summary: 'Done.' })]
+    expect(repeatsAgent(events[1], events)).toBe(true)
+  })
+
+  it('is not a repeat when it differs, or the same text came from another run', () => {
+    expect(repeatsAgent(ev(2, 'run_end', { summary: 'Stopped.' }), [ev(1, 'agent', { text: 'Done.' })])).toBe(false)
+    expect(repeatsAgent(ev(2, 'run_end', { summary: 'Done.' }), [ev(1, 'agent', { text: 'Done.', run_id: 'r0' })])).toBe(false)
   })
 })
