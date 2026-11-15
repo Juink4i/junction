@@ -1,0 +1,20 @@
+# What `railway up --no-gitignore` must NOT upload. data/raw/ IS uploaded on purpose: the
+# image builds data/catalog.db from it. Everything secret or local stays here.
+.env
+.git/
+.venv/
+**/__pycache__/
+.pytest_cache/
+.gstack/
+.superpowers/
+.DS_Store
+*.pdf
+*.pptx
+qa/
+web/ui/
+frontend/node_modules/
+frontend/dist/
+data/*.db
+data/buyer_keys/
+data/buyers/
+server/mandates/

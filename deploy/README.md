@@ -20,3 +20,15 @@ Space builds the `Dockerfile`; the build opens the data with `DATA_KEY` and buil
 Judges open `https://<user>-valio-aimo-trade.hf.space/app/`. On the buyer chat page they type an
 order; the agent runs on the server (one run per kitchen, two at once). `ASK_AGENT=off` (a Space
 variable) turns the order box off.
+
+## Railway (what the judges' link uses)
+
+Hugging Face now needs a PRO plan for Docker Spaces, so the live demo runs on Railway's Free
+plan. Railway builds the same `Dockerfile` from a local upload, so `data/raw/` goes up without
+being committed (`.railwayignore` keeps out keys, `.env` and local state):
+
+```bash
+railway up --no-gitignore --detach           # from the repo root, linked to the project
+railway variables --set GEMINI_API_KEY=... --set VALIO_API_KEY=...   # once
+railway domain                                # once: the public *.up.railway.app link
+```
