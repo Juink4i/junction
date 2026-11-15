@@ -10,12 +10,15 @@ The pages are plain HTML and JavaScript in web/static. This server:
 - lets a buyer edit and re-sign its own mandate (PUT /api/accounts/{id}/mandate; the only
   writes to state.db, see web/mandate_edit.py),
 - serves the Valio Aimo operations view (/api/admin/...), which sees every account,
+- starts the buyer agent for one account from the order box (POST /api/accounts/{id}/ask,
+  see web/ask.py),
 - serves the built React frontend at /app/.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import importlib
 import json
 import mimetypes
@@ -42,7 +45,7 @@ from onboarding.build import build, new_buyer_id, problems
 from onboarding.enroll import BUYERS_DIR, EnrollError, enroll
 from onboarding.options import options as onboarding_options
 from server.db import STATE_DB
-from web import accounts, admin, mandate_edit, profile_edit
+from web import accounts, admin, ask, mandate_edit, profile_edit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).parent / "static"
@@ -120,7 +123,9 @@ def _frame(event: dict[str, Any]) -> str:
 def create_app(trade_http: str | None = None, buyers_dir: Path | None = None, *,
                state_db: str | Path | None = None, mandate_dir: str | Path | None = None,
                catalog: Any = None, frontend_dist: str | Path | None = None,
-               buyer_keys_dir: str | Path | None = None) -> Starlette:
+               buyer_keys_dir: str | Path | None = None,
+               agent_launcher: ask.Launcher | None = None,
+               max_agent_runs: int = ask.MAX_RUNS) -> Starlette:
     trade = (trade_http or os.environ.get("TRADE_HTTP_URL", "http://localhost:8000")).rstrip("/")
     buyers = Path(buyers_dir) if buyers_dir is not None else BUYERS_DIR
     hub = EventHub()
@@ -131,6 +136,10 @@ def create_app(trade_http: str | None = None, buyers_dir: Path | None = None, *,
     mandate_lock = threading.Lock()  # one mandate edit at a time, so versions never collide
     dist = (Path(frontend_dist) if frontend_dist is not None else FRONTEND_DIST).resolve()
     catalog_box: dict[str, Any] = {"catalog": catalog, "loaded": catalog is not None}
+    launcher = agent_launcher or functools.partial(
+        ask.launch_agent, mcp_url=os.environ.get("TRADE_MCP_URL", f"{trade}/mcp"),
+        web_url=os.environ.get("WEB_URL", "http://localhost:8080"))
+    runs = ask.AgentRuns(launcher, hub.publish, max_agent_runs)
 
     def get_catalog() -> Any:
         if not catalog_box["loaded"]:  # imported lazily: the real catalog loads a big file
@@ -374,6 +383,29 @@ def create_app(trade_http: str | None = None, buyers_dir: Path | None = None, *,
             return _error("bad_field", "Send a JSON object with only the fields to change.", 400)
         return await run_in_threadpool(mandate_put, request, change)
 
+    def account_ask_get(request: Request) -> Response:
+        return for_buyer(request, lambda _, buyer_id: {"running": buyer_id in runs.running})
+
+    async def account_ask(request: Request) -> Response:
+        if os.environ.get("ASK_AGENT") == "off":
+            return _error("ask_off", "Starting the agent from the browser is switched off here.", 403)
+        buyer_id = request.path_params["buyer_id"]
+        known = await run_in_threadpool(
+            with_db, lambda conn: JSONResponse({"known": accounts.buyer_exists(conn, buyer_id)}))
+        if known.status_code != 200:
+            return known
+        if not json.loads(known.body)["known"]:
+            return _error("account_not_found", f"No account {buyer_id}.", 404)
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        text = ask.clean_text(body)
+        if text is None:
+            return _error("bad_request", f"Say what to order, in at most {ask.MAX_CHARS} characters.", 400)
+        status, out = runs.start(buyer_id, text)
+        return JSONResponse(out, status)
+
     def account_profile_get(request: Request) -> Response:
         def work(_: sqlite3.Connection, buyer_id: str) -> Any:
             try:
@@ -464,6 +496,8 @@ def create_app(trade_http: str | None = None, buyers_dir: Path | None = None, *,
               methods=["POST"]),
         Route("/api/accounts/{buyer_id}/log", account_log),
         Route("/api/accounts/{buyer_id}/mandate", account_mandate, methods=["PUT"]),
+        Route("/api/accounts/{buyer_id}/ask", account_ask_get, methods=["GET"]),
+        Route("/api/accounts/{buyer_id}/ask", account_ask, methods=["POST"]),
         Route("/api/accounts/{buyer_id}/profile", account_profile_get, methods=["GET"]),
         Route("/api/accounts/{buyer_id}/profile", account_profile_put, methods=["PUT"]),
         Route("/api/admin/clients", admin_clients),

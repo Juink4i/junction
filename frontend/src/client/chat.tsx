@@ -1,11 +1,12 @@
-import { ArrowDown, Bot, Building2, Hourglass, UserRound } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { ArrowDown, Bot, Building2, Hourglass, Loader2, Send, UserRound } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router'
 import { Alternatives } from '@/components/feed'
 import { StatusBadge } from '@/components/status'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { useAccount } from '@/lib/account'
-import { useEvents } from '@/lib/api'
+import { accountPath, api, ApiFailure, useEvents } from '@/lib/api'
 import { dateTime, eur, shortDate, timeOf, unitsBothWays } from '@/lib/format'
 import type { AgentEvent } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -173,6 +174,76 @@ export default function ClientChat() {
           </Button>
         )}
       </div>
+      {buyerId && <AskBox buyerId={buyerId} />}
+    </div>
+  )
+}
+
+const EXAMPLES = ['I need 1,000 litres of lactose-free milk by Monday', 'We need 200 litres of lactose-free milk by Tuesday']
+
+/** The order box: starts this account's agent on the server. Its replies arrive in the chat above. */
+function AskBox({ buyerId }: { buyerId: string }) {
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let live = true
+    const check = () =>
+      api<{ running: boolean }>(accountPath(buyerId, '/ask'))
+        .then((r) => live && setBusy(r.running))
+        .catch(() => {})
+    check()
+    if (!busy) return () => void (live = false)
+    const t = setInterval(check, 2500)
+    return () => {
+      live = false
+      clearInterval(t)
+    }
+  }, [buyerId, busy])
+
+  async function send(e: FormEvent) {
+    e.preventDefault()
+    const t = text.trim()
+    if (!t || busy) return
+    setError(null)
+    try {
+      await api(accountPath(buyerId, '/ask'), { method: 'POST', body: JSON.stringify({ text: t }) })
+      setText('')
+      setBusy(true)
+    } catch (err) {
+      setError(err instanceof ApiFailure ? err.message : 'Could not start your agent.')
+      if (err instanceof ApiFailure && err.code === 'agent_busy') setBusy(true)
+    }
+  }
+
+  return (
+    <div className="mt-3 space-y-2">
+      <form onSubmit={send} className="flex gap-2">
+        <Input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="What should your agent order?"
+          aria-label="What should your agent order?"
+          maxLength={300}
+          disabled={busy}
+          className="h-10 bg-white"
+        />
+        <Button type="submit" className="h-10" disabled={busy || !text.trim()}>
+          {busy ? <Loader2 className="animate-spin" /> : <Send />} {busy ? 'Working…' : 'Send'}
+        </Button>
+      </form>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {!busy && !text && (
+        <div className="flex flex-wrap gap-1.5">
+          {EXAMPLES.map((x) => (
+            <button key={x} type="button" onClick={() => setText(x)} className="rounded-full border bg-white px-3 py-1 text-xs text-muted-foreground hover:text-foreground">
+              {x}
+            </button>
+          ))}
+        </div>
+      )}
+      {busy && <p className="text-xs text-muted-foreground">Your agent is working. If an order needs your approval, approve it on the Overview page.</p>}
     </div>
   )
 }

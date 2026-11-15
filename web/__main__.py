@@ -40,6 +40,7 @@ def main() -> None:
     args = ap.parse_args()
 
     os.environ.setdefault("PHONE_URL", phone_url(args.port, args.local))
+    os.environ.setdefault("WEB_URL", f"http://127.0.0.1:{args.port}")  # where the agent streams to
     print(f"Stage view:  http://localhost:{args.port}/")
     print(f"Approvals:   {os.environ['PHONE_URL']}   (open this on the phone)")
     print(f"Log:         http://localhost:{args.port}/log")
