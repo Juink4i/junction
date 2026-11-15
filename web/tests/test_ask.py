@@ -17,12 +17,15 @@ class FakeAgent:
 
     def __init__(self, exit_code: int = 0, last_line: str = ""):
         self.runs: list[tuple[str, str]] = []
+        self.answers: list[str] = []
         self.done = threading.Event()
         self.exit_code, self.last_line = exit_code, last_line
 
-    async def __call__(self, buyer: str, text: str) -> tuple[int, str]:
+    async def __call__(self, buyer: str, text: str, answers: asyncio.Queue) -> tuple[int, str]:
         self.runs.append((buyer, text))
         while not self.done.is_set():
+            while not answers.empty():
+                self.answers.append(answers.get_nowait())
             await asyncio.sleep(0.01)
         return self.exit_code, self.last_line
 
@@ -47,8 +50,8 @@ def test_ask_starts_the_agent_for_that_account(world):
     with make_client(world, agent) as c:
         res = c.post("/api/accounts/hotel/ask", json={"text": "  1,000 L lactose-free milk by Monday "})
         assert res.status_code == 202
-        assert c.get("/api/accounts/hotel/ask").json() == {"running": True}
-        assert c.get("/api/accounts/cafe/ask").json() == {"running": False}
+        assert c.get("/api/accounts/hotel/ask").json() == {"running": True, "asking": False}
+        assert c.get("/api/accounts/cafe/ask").json() == {"running": False, "asking": False}
         agent.done.set()
         wait_idle(c, "hotel")
     assert agent.runs == [("hotel", "1,000 L lactose-free milk by Monday")]
@@ -67,6 +70,31 @@ def test_one_run_per_account_and_a_cap_on_all_runs(world):
         wait_idle(c, "hotel")
         wait_idle(c, "cafe")
         assert c.post("/api/accounts/school/ask", json={"text": "milk"}).status_code == 202
+
+
+def test_while_the_agent_asks_the_box_sends_the_answer(world):
+    agent = FakeAgent()
+    with make_client(world, agent) as c:
+        assert c.post("/api/accounts/hotel/ask", json={"text": "milk by tomorrow"}).status_code == 202
+        c.post("/api/events", json={"kind": "ask", "buyer": "cafe", "question": "Not hotel's"})
+        assert c.get("/api/accounts/hotel/ask").json()["asking"] is False
+        c.post("/api/events", json={"kind": "ask", "buyer": "hotel", "question": "Is Wednesday fine?"})
+        assert c.get("/api/accounts/hotel/ask").json() == {"running": True, "asking": True}
+        res = c.post("/api/accounts/hotel/ask", json={"text": " Yes,  Wednesday is fine "})
+        assert res.status_code == 202 and res.json() == {"answered": True}
+        for _ in range(200):
+            if agent.answers:
+                break
+            time.sleep(0.01)
+        assert agent.answers == ["Yes, Wednesday is fine"]
+        # The answer is sent once: until the agent says it heard it, more text is not an answer.
+        assert c.get("/api/accounts/hotel/ask").json()["asking"] is False
+        assert c.post("/api/accounts/hotel/ask", json={"text": "again"}).status_code == 409
+        c.post("/api/events", json={"kind": "answer", "buyer": "hotel", "text": "Yes, Wednesday is fine"})
+        assert c.get("/api/accounts/hotel/ask").json()["asking"] is False
+        agent.done.set()
+        wait_idle(c, "hotel")
+    assert agent.answers == ["Yes, Wednesday is fine"]
 
 
 @pytest.mark.parametrize("body", [{"text": ""}, {"text": "   "}, {"text": "x" * 301}, {}, {"text": 5}])
@@ -116,28 +144,47 @@ def test_the_real_launcher_never_hands_the_agent_the_valio_key(monkeypatch):
     async def fake_exec(*args, env=None, **kw):
         seen["args"], seen["env"] = args, env
 
+        class Pipe:
+            def __init__(self):
+                self.data = b""
+
+            def write(self, b):
+                self.data += b
+
+            async def drain(self):
+                pass
+
+            async def read(self):
+                await asyncio.sleep(0.05)
+                return b"Mandate: server/mandates/hotel.jwt\n"
+
         class Proc:
             returncode = 0
-            stderr = None
+            stdin, stderr = Pipe(), Pipe()
 
             async def wait(self):
                 return 0
 
-            async def communicate(self):
-                return b"", b""
-
+        seen["proc"] = Proc
         return Proc()
 
     monkeypatch.setenv("VALIO_API_KEY", "valio-secret-123")
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-key-456")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    code, _ = asyncio.run(ask.launch_agent("hotel", "--gullible milk", mcp_url="http://t/mcp",
-                                           web_url="http://w"))
-    assert code == 0
+    async def run():
+        answers = asyncio.Queue()
+        answers.put_nowait("yes")
+        return await ask.launch_agent("hotel", "--gullible milk", answers, mcp_url="http://t/mcp",
+                                      web_url="http://w")
+
+    code, last = asyncio.run(run())
+    assert (code, last) == (0, "Mandate: server/mandates/hotel.jwt")
+    assert seen["proc"].stdin.data == b"yes\n"
     assert "VALIO_API_KEY" not in seen["env"]
     assert seen["env"]["GEMINI_API_KEY"] == "gemini-key-456"
     args = list(seen["args"])
     # The request goes after "--", so text that looks like a flag stays text.
     assert args[-2:] == ["--", "--gullible milk"]
     assert args[args.index("--buyer") + 1] == "hotel"
+    assert "--answers-on-stdin" in args
     assert "--gullible" not in args[:-1]

@@ -181,3 +181,21 @@ async def test_a_refused_mandate_ends_the_run_with_the_onboarding_link(monkeypat
     note = next(e for e in sink.history if e["kind"] == "note")
     assert "http://localhost:8080/onboarding" in note["text"]
     assert sink.history[-1]["kind"] == "run_end"
+
+
+async def test_answers_can_come_from_a_pipe(monkeypatch):
+    """Started from the order box, the agent reads the buyer's answers from stdin, not a terminal."""
+    import io
+    import sys
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Yes, Wednesday is fine\n"))
+    ask = make_ask([], interactive=True)
+    assert await ask("Is Wednesday fine?") == "Yes, Wednesday is fine"
+    assert await ask("And Thursday?") is None  # the pipe closed: no answer, not a crash
+
+
+def test_answers_on_stdin_flag():
+    from agent.__main__ import parse_args
+
+    assert parse_args(["--answers-on-stdin", "milk"]).answers_on_stdin is True
+    assert parse_args(["milk"]).answers_on_stdin is False

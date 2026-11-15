@@ -16,7 +16,7 @@ from agent.config import (BUYERS, DEFAULT_MODEL, Settings, known_buyer, load_gem
 from agent.events import EventSink
 from agent.identity import key_path
 from agent.mcp_link import TradeServerUnreachable
-from agent.runner import check_model, run_buyer
+from agent.runner import check_model, make_ask, run_buyer
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -32,6 +32,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--wait", type=float, default=300, help="Seconds to wait for a person to approve.")
     ap.add_argument("--reply", action="append", default=[],
                     help="Scripted answer if the agent asks the buyer something (repeatable).")
+    ap.add_argument("--answers-on-stdin", action="store_true",
+                    help="Read the buyer's answers from stdin even when it is not a terminal "
+                         "(the web order box pipes them in).")
     ap.add_argument("--gullible", action="store_true",
                     help="Demo only: let catalog text instruct the agent, to simulate prompt injection.")
     return ap.parse_args(argv)
@@ -68,7 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Mandate: {source}", file=sys.stderr)
     sink = EventSink(settings.web_url, secrets=secret_values(), buyer=settings.buyer)
     try:
-        result = asyncio.run(run_buyer(args.request, settings, sink))
+        ask = make_ask(args.reply, interactive=True) if args.answers_on_stdin else None
+        result = asyncio.run(run_buyer(args.request, settings, sink, ask))
     except TradeServerUnreachable as exc:  # includes TradeServerRefused (401, with the reason)
         print(str(exc), file=sys.stderr)
         return 3

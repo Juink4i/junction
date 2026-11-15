@@ -181,56 +181,65 @@ export default function ClientChat() {
 
 const EXAMPLES = ['I need 1,000 litres of lactose-free milk by Monday', 'We need 200 litres of lactose-free milk by Tuesday']
 
-/** The order box: starts this account's agent on the server. Its replies arrive in the chat above. */
+/** The order box: starts this account's agent on the server, and answers it when it asks. Its replies arrive in the chat above. */
 function AskBox({ buyerId }: { buyerId: string }) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
+  const [asking, setAsking] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let live = true
     const check = () =>
-      api<{ running: boolean }>(accountPath(buyerId, '/ask'))
-        .then((r) => live && setBusy(r.running))
+      api<{ running: boolean; asking: boolean }>(accountPath(buyerId, '/ask'))
+        .then((r) => {
+          if (!live) return
+          setBusy(r.running)
+          setAsking(r.asking)
+        })
         .catch(() => {})
     check()
     if (!busy) return () => void (live = false)
-    const t = setInterval(check, 2500)
+    const t = setInterval(check, 1500)
     return () => {
       live = false
       clearInterval(t)
     }
   }, [buyerId, busy])
 
+  const open = !busy || asking
   async function send(e: FormEvent) {
     e.preventDefault()
     const t = text.trim()
-    if (!t || busy) return
+    if (!t || !open) return
     setError(null)
     try {
       await api(accountPath(buyerId, '/ask'), { method: 'POST', body: JSON.stringify({ text: t }) })
       setText('')
       setBusy(true)
+      setAsking(false)
     } catch (err) {
-      setError(err instanceof ApiFailure ? err.message : 'Could not start your agent.')
+      setError(err instanceof ApiFailure ? err.message : 'Could not reach your agent.')
       if (err instanceof ApiFailure && err.code === 'agent_busy') setBusy(true)
     }
   }
 
+  const label = asking ? 'Answer your agent' : 'What should your agent order?'
   return (
     <div className="mt-3 space-y-2">
       <form onSubmit={send} className="flex gap-2">
         <Input
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="What should your agent order?"
-          aria-label="What should your agent order?"
+          placeholder={asking ? 'Answer your agent…' : label}
+          aria-label={label}
           maxLength={300}
-          disabled={busy}
-          className="h-10 bg-white"
+          disabled={!open}
+          autoFocus={asking}
+          className={cn('h-10 bg-white', asking && 'ring-2 ring-primary/40')}
         />
-        <Button type="submit" className="h-10" disabled={busy || !text.trim()}>
-          {busy ? <Loader2 className="animate-spin" /> : <Send />} {busy ? 'Working…' : 'Send'}
+        <Button type="submit" className="h-10" disabled={!open || !text.trim()}>
+          {open ? <Send /> : <Loader2 className="animate-spin" />} {asking ? 'Answer' : busy ? 'Working…' : 'Send'}
         </Button>
       </form>
       {error && <p className="text-sm text-destructive">{error}</p>}
@@ -243,7 +252,8 @@ function AskBox({ buyerId }: { buyerId: string }) {
           ))}
         </div>
       )}
-      {busy && <p className="text-xs text-muted-foreground">Your agent is working. If an order needs your approval, approve it on the Overview page.</p>}
+      {asking && <p className="text-xs text-muted-foreground">Your agent asked you something above. Type your answer.</p>}
+      {busy && !asking && <p className="text-xs text-muted-foreground">Your agent is working. If an order needs your approval, approve it on the Overview page.</p>}
     </div>
   )
 }

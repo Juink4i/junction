@@ -218,7 +218,9 @@ def create_app(trade_http: str | None = None, buyers_dir: Path | None = None, *,
         if not isinstance(event, dict) or "kind" not in event:
             return JSONResponse({"code": "bad_event", "message": "Need a JSON object with a kind.",
                                  "retryable": False}, 400)
-        return JSONResponse(hub.publish(event))
+        published = hub.publish(event)
+        runs.saw(published)
+        return JSONResponse(published)
 
     async def events_get(request: Request) -> JSONResponse:
         keep = buyer_filter(request.query_params.get("buyer"))
@@ -384,7 +386,7 @@ def create_app(trade_http: str | None = None, buyers_dir: Path | None = None, *,
         return await run_in_threadpool(mandate_put, request, change)
 
     def account_ask_get(request: Request) -> Response:
-        return for_buyer(request, lambda _, buyer_id: {"running": buyer_id in runs.running})
+        return for_buyer(request, lambda _, buyer_id: runs.status(buyer_id))
 
     async def account_ask(request: Request) -> Response:
         if os.environ.get("ASK_AGENT") == "off":

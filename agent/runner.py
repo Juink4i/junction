@@ -64,7 +64,10 @@ def make_ask(replies: list[str], interactive: bool | None = None) -> AskFn:
         if queue:
             return queue.pop(0)
         if interactive:
-            return (await asyncio.to_thread(input, "   Your answer: ")).strip() or None
+            try:
+                return (await asyncio.to_thread(input, "   Your answer: ")).strip() or None
+            except EOFError:  # answers come through a pipe (the order box) and it closed
+                return None
         return None
 
     return ask
