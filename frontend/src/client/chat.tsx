@@ -110,9 +110,12 @@ export function toChat(events: AgentEvent[]): Msg[] {
           ),
         })
         break
-      case 'run_end':
-        if (e.summary) out.push({ id: e.id, side: 'left', who: 'Your agent', icon: 'agent', time: e.ts, body: e.summary })
+      case 'run_end': {
+        // The summary is the agent's last message, already shown when it was said.
+        const said = events.some((a) => a.kind === 'agent' && a.run_id === e.run_id && a.text === e.summary)
+        if (e.summary && !said) out.push({ id: e.id, side: 'left', who: 'Your agent', icon: 'agent', time: e.ts, body: e.summary })
         break
+      }
     }
   }
   return out
