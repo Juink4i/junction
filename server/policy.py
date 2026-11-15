@@ -1,5 +1,6 @@
 """Policy: plain code that decides what happens to an order. No AI in here."""
 
+import math
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from statistics import median
@@ -142,11 +143,11 @@ def _substitution(quote: dict, mandate: dict, first_choice: dict | None) -> list
         if rules.get("allowed", True) is False:
             reasons.append(f"{line['name']} replaces the first choice, {first_choice['name']}. "
                            "This buyer's mandate allows no substitutes without a person's approval.")
-        elif cap is not None:
+        elif cap is not None and first_choice["eur_per_unit"] > 0:
             increase = (line["line_total_eur"] / line["covers"]) / first_choice["eur_per_unit"] - 1
             if increase * 100 > cap:
                 unit = UNIT_WORDS.get(line["content_unit"], line["content_unit"])
-                reasons.append(f"{line['name']} costs {round(increase * 100)}% more per {unit} than "
+                reasons.append(f"{line['name']} costs {math.ceil(increase * 100)}% more per {unit} than "
                                f"the first choice, {first_choice['name']}. The mandate allows "
                                f"substitutes up to {cap:g}% more.")
     return reasons

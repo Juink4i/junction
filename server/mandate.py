@@ -72,6 +72,14 @@ def _shape_problems(mandate: dict) -> list[str]:
             problems.append("substitution must be an object")
         elif "must_keep" in substitution and not _texts(substitution["must_keep"]):
             problems.append("substitution.must_keep must be a list of tags")
+        if isinstance(substitution, dict):
+            if "allowed" in substitution and not isinstance(substitution["allowed"], bool):
+                problems.append("substitution.allowed must be true or false")
+            if "max_price_increase_pct" in substitution:
+                pct = substitution["max_price_increase_pct"]
+                if not (_amount(pct) and pct <= 100):
+                    problems.append("substitution.max_price_increase_pct must be a number "
+                                    "between 0 and 100")
     if "approvers" in mandate and not _texts(mandate["approvers"]):
         problems.append("approvers must be a list of names or addresses")
 

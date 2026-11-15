@@ -11,7 +11,7 @@ You call **Contract A** (the catalog's functions) and provide **Contract B** (si
 ## Context you need
 
 - Server name `valio-aimo-trade`, at `http://localhost:8000/mcp`. Official MCP Python SDK.
-- Only `request_quote` calls the Valio Aimo APIs: one price call and one availability call per request, however many products. `search_products` reads the product file and asks the seller agent (one Gemini call, or keyword rules).
+- Only `request_quote` calls the Valio Aimo APIs: one price call and one availability call per request, however many products. When nothing is orderable for `need_by`, up to 3 more pairs probe later dates for the `earliest` field. `search_products` reads the product file and asks the seller agent (one Gemini call, or keyword rules).
 - The mandate JSON shape and the "who decides" table are in `docs/valio-aimo-discussion.md`, section 4. Each table row is one test.
 - Order outcomes: `confirmed`, `pending_approval` (over a limit, late, missing allergen data, or more than 5× the buyer's usual amount), `rejected` (no override possible).
 - The buyer's "usual amount" comes from made-up order history that you seed for the demo buyers: a hotel, a café and a school.

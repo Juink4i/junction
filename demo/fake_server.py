@@ -387,7 +387,7 @@ def request_quote(ctx: Context, product_ids: list[str] | None = None, amount: fl
             f"{_eur(quote['total_eur'])} before tax.", refs=(quote["quote_id"],))
     return dict(status="ok", set_id=set_id,
                 asked=dict(amount=amount, unit=unit, need_by=need.isoformat()),
-                options=options, not_offered=not_offered)
+                options=options, not_offered=not_offered, earliest=None)
 
 
 def _mandate_for(token: str) -> dict[str, Any] | None:

@@ -109,3 +109,28 @@ def test_a_cutoff_passed_candidate_does_not_hide_or_beat_a_genuinely_later_one()
 
     result, _, _ = quote(rule)
     assert result["earliest"] == {"date": "2026-11-18", "product_ids": ["465039"]}
+
+
+def test_a_late_split_line_never_gives_an_earliest_on_or_before_need_by():
+    def rule(d, pid):
+        if pid == "464201":
+            return {"available_date": NEED_BY, "cutoff_passed": False, "available_units": 4}
+        return {"available_date": date(2026, 11, 19), "cutoff_passed": False}
+
+    result, _, _ = quote(rule)
+    assert result["earliest"] is not None
+    assert result["earliest"]["date"] > NEED_BY.isoformat()
+
+
+def test_only_products_that_cannot_be_ordered_are_probed():
+    def rule(d, pid):
+        if pid == "464201":
+            return {"orderable": False}
+        return {"available_units": 1, "available_date": NEED_BY, "cutoff_passed": False}
+
+    result, catalog, _ = quote(rule)
+    assert result["options"] == []
+    reasons = [n["reason"] for n in result["not_offered"]]
+    assert any(r.startswith("Cannot be ordered") for r in reasons)
+    assert any(r.startswith("Only") for r in reasons)
+    assert all(pids == ["464201"] for pids, d in catalog.calls[1:])

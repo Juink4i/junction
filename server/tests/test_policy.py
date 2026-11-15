@@ -429,3 +429,14 @@ def test_a_mandate_without_substitution_rules_is_not_affected():
 def test_no_first_choice_means_no_substitution_check():
     decision = decide(quote(substitute(1.80)), no_substitutes(), PRODUCTS, [])
     assert decision.status == "confirmed"
+
+
+def test_the_printed_percentage_rounds_up_so_it_never_equals_the_cap():
+    decision = decide(quote(substitute(1.56 * 1.104)), mandate(), PRODUCTS, [], first_choice=FIRST)
+    assert any("costs 11% more" in r and "up to 10% more" in r for r in decision.reasons)
+
+
+def test_a_free_first_choice_skips_the_price_cap_check():
+    free = FIRST | {"eur_per_unit": 0}
+    decision = decide(quote(substitute(1.80)), mandate(), PRODUCTS, [], first_choice=free)
+    assert decision.status == "confirmed"

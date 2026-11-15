@@ -638,26 +638,29 @@ class Service:
         if any(all(l.candidate.on_time(need_by) for l in plan.lines) for plan in plans):
             return None
         found: dict[date, list[str]] = {}
-        for c in candidates:
-            if c.available_date is not None and not c.cutoff_passed:
-                found.setdefault(c.available_date, []).append(c.product_id)
+        for plan in plans:
+            cs = [l.candidate for l in plan.lines]
+            if all(c.available_date is not None and not c.cutoff_passed for c in cs):
+                found.setdefault(max(c.available_date for c in cs), []).extend(
+                    c.product_id for c in cs)
         if not candidates:
             blocked = [n["product_id"] for n in not_offered
                        if n["reason"].startswith("Cannot be ordered for")]
-            for days in range(1, 4) if blocked else ():
-                day = need_by + timedelta(days=days)
-                probe = self._offers(blocked, day)
-                if "code" in probe and "retryable" in probe:
-                    continue
-                for pid, offer in probe.items():
-                    if offer.orderable and offer.available_date is not None:
-                        found.setdefault(offer.available_date, []).append(pid)
-                if found:
-                    break
+            if blocked:
+                for days in range(1, 4):
+                    day = need_by + timedelta(days=days)
+                    probe = self._offers(blocked, day)
+                    if "code" in probe and "retryable" in probe:
+                        continue
+                    for pid, offer in probe.items():
+                        if offer.orderable and offer.available_date is not None:
+                            found.setdefault(offer.available_date, []).append(pid)
+                    if found:
+                        break
         if not found:
             return None
         day = min(found)
-        ids = sorted(found[day])
+        ids = sorted(set(found[day]))
         self._log(buyer.actor, "request_quote",
                   f"Nothing arrives by {need_by.isoformat()}. The earliest delivery is "
                   f"{day.isoformat()} ({len(ids)} product{'s' if len(ids) != 1 else ''}).")

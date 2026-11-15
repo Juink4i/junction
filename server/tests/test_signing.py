@@ -176,6 +176,12 @@ def signed(conn, **changes):
     {"hard_rules__unknown_allergens": None},
     {"substitution": None},
     {"substitution__must_keep": "FREE_FROM_LACTOSE"},
+    {"substitution__allowed": "no"},
+    {"substitution__max_price_increase_pct": "10"},
+    {"substitution__max_price_increase_pct": True},
+    {"substitution__max_price_increase_pct": -1},
+    {"substitution__max_price_increase_pct": 101},
+    {"substitution__max_price_increase_pct": float("nan")},
     {"approvers": "boss@hotel.example"},
 ])
 def test_signed_mandate_with_a_badly_shaped_field_is_rejected(conn, changes):
