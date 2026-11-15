@@ -6,6 +6,7 @@ from datetime import date
 import pytest
 
 from onboarding.build import build, new_buyer_id, problems
+from catalog.names import CATEGORY_NAMES
 from onboarding.options import TEMPLATES, options, template
 from server.mandate import _shape_problems
 
@@ -258,3 +259,27 @@ def test_the_other_14_properties_are_offered_as_preferences():
 
     answers["prefer"] = ["VEGAN"]
     assert any("Vegan" in p and "rule" in p for p in problems(answers))
+
+
+def test_every_category_is_offered_with_example_products(tmp_path):
+    import sqlite3
+
+    from onboarding.options import category_examples
+
+    db = tmp_path / "catalog.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE products (id TEXT, category TEXT, name_en TEXT, name_fi TEXT)")
+    con.executemany("INSERT INTO products VALUES (?, ?, ?, ?)", [
+        ("1", "10402", "Oatly Oat Drink Semi 1L", ""), ("2", "10402", "Alpro soya drink 1 L", ""),
+        ("3", "10402", "Oddlygood® Barista oat drink 1 l UHT gluten free", ""),
+        ("4", "10402", "Elovena 1l oat drink barista", ""), ("5", "10500", "", "Voi 500 g")])
+    con.commit()
+    examples = category_examples(db)
+    assert len(examples["10402"]) == 3 and "Oatly Oat Drink Semi 1L" in examples["10402"]
+    assert examples["10500"] == ["Voi 500 g"]  # no English name: the Finnish one
+    assert category_examples(tmp_path / "missing.db") == {}
+
+    offered = options()["categories"]
+    assert len(offered) == len(CATEGORY_NAMES) > 300
+    assert offered[0]["code"] == "10400"
+    assert all({"code", "name", "examples"} <= set(c) for c in offered)

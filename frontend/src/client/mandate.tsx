@@ -1,7 +1,7 @@
 import { AlertTriangle, BadgeCheck, Ban, CalendarClock, Euro, Loader2, Package, Pencil, Repeat, ShieldAlert, Sparkles, Tags, UserCheck, Wallet } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { Chips, PriorityRanker, UsualOrders } from '@/components/answers'
+import { CategoryPicker, Chips, PriorityRanker, UsualOrders } from '@/components/answers'
 import { AllergenChips, Chip, TagChips } from '@/components/common'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -10,7 +10,7 @@ import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetT
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAccount } from '@/lib/account'
 import { accountPath, api, usePoll, type ApiFailure } from '@/lib/api'
-import { allergenName, categoryName, eur, shortDate, tagName } from '@/lib/format'
+import { allergenName, eur, shortDate, tagName } from '@/lib/format'
 import { changesOf, draftOf, type Draft } from '@/lib/mandate-draft'
 import type { Account, Choice, Mandate, OnboardingOptions, Profile } from '@/lib/types'
 
@@ -47,7 +47,7 @@ function Rules({ m, profile, opts }: { m: Mandate; profile: Profile | null; opts
       </Rule>
       {!!m.auto_approve.allowed_categories?.length && (
         <Rule icon={<Tags className="size-4" />} title="Allowed categories">
-          {m.auto_approve.allowed_categories.map(categoryName).join(', ')}
+          {m.auto_approve.allowed_categories.map((c) => nameIn(opts.categories, c)).join(', ')}
         </Rule>
       )}
       {m.substitution.must_keep.length > 0 && (
@@ -74,7 +74,7 @@ function Rules({ m, profile, opts }: { m: Mandate; profile: Profile | null; opts
           <ul className="space-y-0.5">
             {m.usual_orders.map((o, i) => (
               <li key={i}>
-                {o.amount} {o.content_unit} of {profile?.usual_orders[i]?.what || categoryName(o.category)} every {o.every}
+                {o.amount} {o.content_unit} of {profile?.usual_orders[i]?.what || nameIn(opts.categories, o.category)} every {o.every}
                 {o.on != null && (o.every === 'month' ? ` on day ${o.on}` : ` on ${day(String(o.on))}`)}
               </li>
             ))}
@@ -175,6 +175,10 @@ function Editor({ account, m, profile, opts, onDone }: { account: Account; m: Ma
 
       <Field label="Days you can receive goods" hint="None picked means any day.">
         <Chips items={opts.weekdays} chosen={d.days} onChange={(v) => set('days', v)} />
+      </Field>
+
+      <Field label="What the agent may buy" hint="None picked means any category.">
+        <CategoryPicker items={opts.categories} chosen={d.categories} onChange={(v) => set('categories', v)} />
       </Field>
 
       <div className="space-y-3 rounded-lg border p-4">

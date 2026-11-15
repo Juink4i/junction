@@ -36,3 +36,14 @@ def test_every_nutrition_claim_in_the_product_file_has_a_name(catalog_db):
 def test_an_unlisted_tag_is_shown_in_lower_case_not_hidden():
     assert api.tag_name("FREE_FROM_LACTOSE") == "lactose-free"
     assert api.tag_name("SOME_NEW_CLAIM") == "some new claim"
+
+
+def test_every_category_in_the_product_file_has_a_name(catalog_db):
+    import sqlite3
+
+    from catalog.names import CATEGORY_NAMES
+
+    con = sqlite3.connect(catalog_db)
+    codes = {row[0] for row in con.execute("SELECT DISTINCT category FROM products")}
+    assert codes <= set(CATEGORY_NAMES)
+    assert all(CATEGORY_NAMES[code].strip() for code in codes)

@@ -1,10 +1,14 @@
 """Readable names for codes. The product file only has category codes and GS1 allergen codes.
 
-Category names are ours, read off sample products, and cover only the categories we demo.
+Category names are ours, read off sample products: a few by hand for the categories we demo,
+the rest suggested by Gemini once (catalog/name_categories.py) and reviewed.
 Allergen names follow the GS1 AllergenTypeCode list; codes we couldn't confirm are left out.
 """
 
-CATEGORY_NAMES = {
+import json
+from pathlib import Path
+
+_HAND_NAMED = {
     "10400": "Milk and sour milk",
     "10401": "Cream",
     "10402": "Plant-based drinks",
@@ -12,6 +16,11 @@ CATEGORY_NAMES = {
     "17401": "Tomatoes",
     "17402": "Pumpkins and courgettes",
 }
+_GENERATED = json.loads((Path(__file__).resolve().parent / "category_names.json").read_text())
+# The demo categories first, so a new usual order still starts on milk; then A to Z.
+CATEGORY_NAMES = {**_HAND_NAMED, **dict(sorted(
+    ((code, name) for code, name in _GENERATED.items() if code not in _HAND_NAMED),
+    key=lambda item: item[1].lower()))}
 
 ALLERGEN_NAMES = {
     # The 14 allergens EU law requires on labels

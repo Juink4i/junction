@@ -12,12 +12,18 @@
       border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink);
       font-weight: 600; font-size: 13.5px; cursor: pointer; user-select: none; }
     .chip input { position: absolute; opacity: 0; pointer-events: none; }
-    .chip:has(input:checked) { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+    .chip:has(input:checked), .chip.on { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+    #cats:not(:empty) { margin-bottom: 8px; }
+    .found { margin-top: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+    .found button { display: block; width: 100%; padding: 8px 10px; border: 0; border-top: 1px solid var(--line);
+      background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+    .found button:first-child { border-top: 0; }
+    .found .eg { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .card h2 { margin: 0 0 4px; font-size: 16px; }
     .field { margin-top: 14px; }
     .lab { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; font-weight: 600;
       color: var(--muted); margin-bottom: 6px; }
-    input[type=text], input[type=number], select { width: 100%; min-height: 40px; padding: 0 10px;
+    input[type=text], input[type=number], input[type=search], select { width: 100%; min-height: 40px; padding: 0 10px;
       border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; }
     .inline { display: flex; gap: 8px; align-items: center; }
     .inline > * { flex: 1; min-width: 0; }
@@ -82,6 +88,12 @@
           <div class="field"><div class="lab">Every product must be <span class="faint">(optional)</span></div>
             ${chips("must_be", opts.tags, a.safety.must_be)}</div>
         </section>
+        <section class="card"><h2>What the agent may buy</h2>
+          <div class="field"><label class="lab" for="cat_search">Categories <span class="faint">(optional). None picked means any category.</span></label>
+            <div id="cats" class="chips"></div>
+            <input type="search" id="cat_search" placeholder="Search categories, for example butter or oat drink">
+            <div id="cat_found"></div></div>
+        </section>
         <section class="card"><h2>Money</h2>
           <div class="field"><label class="lab" for="max_order">The agent may spend alone, per order, in euros</label>
             <input type="number" id="max_order" min="0" step="10" value="${esc(a.money.max_order_eur)}"></div>
@@ -103,6 +115,32 @@
         </section>`;
       renderRanks();
       renderUsual();
+      renderCats();
+    }
+
+    // Name matches first, then code or example product, so "oat" finds "Plant-based drinks".
+    // From the start of a word, so "oat" does not find "goat".
+    function findCategories(query, skip) {
+      const q = query.trim().toLowerCase();
+      if (!q) return [];
+      const word = new RegExp(`(^|[^\\p{L}\\p{N}])${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "u");
+      const open = opts.categories.filter((c) => !skip.includes(c.code));
+      const inName = (c) => word.test(c.name.toLowerCase());
+      const elsewhere = (c) => c.code.startsWith(q) || (c.examples || []).some((e) => word.test(e.toLowerCase()));
+      return [...open.filter(inName), ...open.filter((c) => !inName(c) && elsewhere(c))].slice(0, 8);
+    }
+
+    function renderCats() {
+      const chosen = answers.money.allowed_categories;
+      const name = (code) => opts.categories.find((c) => c.code === code)?.name ?? code;
+      $("cats").innerHTML = chosen.map((code) =>
+        `<button type="button" class="chip on" data-uncat="${esc(code)}" aria-label="Remove ${esc(name(code))}">${esc(name(code))} ×</button>`).join("");
+      const query = $("cat_search").value;
+      const found = findCategories(query, chosen);
+      $("cat_found").innerHTML = !query.trim() ? "" : found.length
+        ? '<div class="found">' + found.map((c) => `<button type="button" data-cat="${esc(c.code)}">+ ${esc(c.name)}`
+            + (c.examples?.length ? `<span class="eg">e.g. ${esc(c.examples.join(", "))}</span>` : "") + "</button>").join("") + "</div>"
+        : `<p class="muted">No category matches “${esc(query.trim())}”.</p>`;
     }
 
     function renderRanks() {
@@ -188,16 +226,27 @@
 
     function useTemplate(kind) {
       answers = JSON.parse(JSON.stringify(opts.templates[kind]));
+      answers.money.allowed_categories ??= [];
       renderForm();
       preview();
     }
 
     (async () => {
       opts = await getJSON("/api/onboarding/options");
-      $("form").addEventListener("input", previewSoon);
+      $("form").addEventListener("input", (e) => {
+        if (e.target.id === "cat_search") renderCats();
+        else previewSoon();
+      });
       $("form").addEventListener("click", (e) => {
-        const t = e.target;
-        if (t.dataset.up !== undefined) {
+        const t = e.target.closest("button") || e.target;
+        const cats = answers.money.allowed_categories;
+        if (t.dataset.cat !== undefined) {
+          cats.push(t.dataset.cat);
+          renderCats(); previewSoon();
+        } else if (t.dataset.uncat !== undefined) {
+          cats.splice(cats.indexOf(t.dataset.uncat), 1);
+          renderCats(); previewSoon();
+        } else if (t.dataset.up !== undefined) {
           collect();
           const i = Number(t.dataset.up), p = answers.money.priorities;
           [p[i - 1], p[i]] = [p[i], p[i - 1]];

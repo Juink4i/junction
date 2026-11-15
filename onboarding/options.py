@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import copy
+import functools
+import sqlite3
+from pathlib import Path
 from typing import Any
 
+from catalog.load import DB_PATH
 from catalog.names import ALLERGEN_NAMES, CATEGORY_NAMES, TAG_NAMES
 from server.claims import RULES
 
@@ -43,7 +47,7 @@ def _kitchen(kind: str, name: str, approver: str, *, blocked: list[str], must_be
     return {
         "kitchen": {"name": name, "type": kind, "approver": approver, "enrolment_code": code},
         "safety": {"blocked_allergens": blocked, "unknown_allergens": "human", "must_be": must_be},
-        "money": {"max_order_eur": max_order,
+        "money": {"allowed_categories": [], "max_order_eur": max_order,
                   "budget": {"period": budget[0], "max_eur": budget[1]},
                   "priorities": list(_PRICE_FIRST)},
         "delivery": {"days": days, "pack_size": pack},
@@ -85,13 +89,34 @@ def _listed(names: dict[str, str]) -> list[dict[str, str]]:
     return [{"code": code, "name": name} for code, name in names.items()]
 
 
+@functools.cache
+def category_examples(db_path: Path = DB_PATH) -> dict[str, list[str]]:
+    """Three product names per category, so a search for "oat" finds "Plant-based drinks".
+    Without the catalog the categories are offered by name only."""
+    if not Path(db_path).exists():
+        return {}
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        rows = con.execute(
+            "SELECT category, name FROM (SELECT category, COALESCE(NULLIF(name_en, ''), name_fi) AS name,"
+            " ROW_NUMBER() OVER (PARTITION BY category ORDER BY length(name_en), id) AS n FROM products)"
+            " WHERE n <= 3").fetchall()
+    finally:
+        con.close()
+    examples: dict[str, list[str]] = {}
+    for category, name in rows:
+        examples.setdefault(category, []).append(name)
+    return examples
+
+
 def options() -> dict[str, Any]:
     """Everything the page needs to draw the form, so the page hard-codes no list."""
     return {
         "kitchen_types": _listed(KITCHEN_TYPES),
         "templates": copy.deepcopy(TEMPLATES),
         "allergens": _listed(ALLERGENS),
-        "categories": _listed(CATEGORIES),
+        "categories": [{"code": code, "name": name, "examples": category_examples().get(code, [])}
+                       for code, name in CATEGORIES.items()],
         "tags": _listed(MUST_BE),
         "prefer_tags": _listed(PREFER),
         "weekdays": _listed(WEEKDAYS),

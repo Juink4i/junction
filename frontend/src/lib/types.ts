@@ -148,6 +148,8 @@ export interface MandateChanges {
 export interface Choice {
   code: string
   name: string
+  /** Categories only: a few product names, for searching. */
+  examples?: string[]
 }
 export interface UsualOrder {
   what: string

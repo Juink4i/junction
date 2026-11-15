@@ -2,7 +2,7 @@ import { BadgeCheck, Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import { Chips, PriorityRanker, UsualOrders } from '@/components/answers'
+import { CategoryPicker, Chips, PriorityRanker, UsualOrders } from '@/components/answers'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -148,6 +148,13 @@ export default function Onboarding() {
           <Field label={<>Every product must be <span className="font-normal text-muted-foreground/80">(optional)</span></>}>
             <Chips items={opts.tags} chosen={a.safety.must_be} onChange={(v) => update((d) => void (d.safety.must_be = v))} />
             <p className="text-xs text-muted-foreground">The supplier says so, or its allergen data shows it. If neither says, it follows the missing-allergen setting. Other properties, like low-salt, are preferences.</p>
+          </Field>
+        </Section>
+
+        <Section title="What the agent may buy">
+          <Field label={<>Categories <span className="font-normal text-muted-foreground/80">(optional)</span></>}>
+            <CategoryPicker items={opts.categories} chosen={a.money.allowed_categories ?? []} onChange={(v) => update((d) => void (d.money.allowed_categories = v))} />
+            <p className="text-xs text-muted-foreground">None picked means any category.</p>
           </Field>
         </Section>
 

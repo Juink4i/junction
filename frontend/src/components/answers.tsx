@@ -1,6 +1,7 @@
 // Form widgets for a kitchen's answers, shared by onboarding and the mandate editor,
 // so a field set at sign-up is edited later with the same control and the same choices.
-import { ArrowUp, Plus, Trash2 } from 'lucide-react'
+import { ArrowUp, Plus, Trash2, X } from 'lucide-react'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import type { Choice, OnboardingOptions, UsualOrder } from '@/lib/types'
@@ -34,6 +35,64 @@ export function Chips({ items, chosen, onChange, single, tone = 'sage' }: { item
           </button>
         )
       })}
+    </div>
+  )
+}
+
+/** Matches on the name first, then on the code or an example product, so "oat" finds "Plant-based drinks". */
+export function findCategories(items: Choice[], query: string, skip: string[], limit = 8): Choice[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return []
+  // From the start of a word, so "oat" does not find "goat" or "groats".
+  const word = new RegExp(`(^|[^\\p{L}\\p{N}])${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'u')
+  const inName = (c: Choice) => word.test(c.name.toLowerCase())
+  const elsewhere = (c: Choice) => c.code.startsWith(q) || (c.examples ?? []).some((e) => word.test(e.toLowerCase()))
+  const open = items.filter((c) => !skip.includes(c.code))
+  return [...open.filter(inName), ...open.filter((c) => !inName(c) && elsewhere(c))].slice(0, limit)
+}
+
+/** Picked categories as removable chips, and a search box to add more. */
+export function CategoryPicker({ items, chosen, onChange }: { items: Choice[]; chosen: string[]; onChange: (v: string[]) => void }) {
+  const [query, setQuery] = useState('')
+  const found = findCategories(items, query, chosen)
+  const name = (code: string) => items.find((c) => c.code === code)?.name ?? code
+
+  return (
+    <div className="space-y-2">
+      {chosen.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {chosen.map((code) => (
+            <button
+              key={code}
+              type="button"
+              aria-label={`Remove ${name(code)}`}
+              onClick={() => onChange(chosen.filter((c) => c !== code))}
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-primary bg-primary px-3 text-[13px] font-medium text-primary-foreground"
+            >
+              {name(code)} <X className="size-3.5" />
+            </button>
+          ))}
+        </div>
+      )}
+      <Input type="search" placeholder="Search categories, for example butter or oat drink" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search categories" />
+      {query.trim() !== '' &&
+        (found.length ? (
+          <ul className="divide-y rounded-md border bg-white">
+            {found.map((c) => (
+              <li key={c.code}>
+                <button type="button" onClick={() => onChange([...chosen, c.code])} className="flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-muted">
+                  <Plus className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0">
+                    <span className="text-sm font-medium text-emphasis">{c.name}</span>
+                    {c.examples?.length ? <span className="block truncate text-xs text-muted-foreground">e.g. {c.examples.join(', ')}</span> : null}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-muted-foreground">No category matches “{query.trim()}”.</p>
+        ))}
     </div>
   )
 }
