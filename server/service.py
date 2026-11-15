@@ -635,12 +635,11 @@ class Service:
     def _earliest(self, buyer: Buyer, candidates: list[ranking.Candidate], plans: list,
                   not_offered: list[dict], need_by: date) -> dict | None:
         """The earliest delivery date, when no offered option arrives by need_by."""
-        if any(all(l.candidate.available_date is not None and l.candidate.available_date <= need_by
-                   for l in plan.lines) for plan in plans):
+        if any(all(l.candidate.on_time(need_by) for l in plan.lines) for plan in plans):
             return None
         found: dict[date, list[str]] = {}
         for c in candidates:
-            if c.available_date is not None:
+            if c.available_date is not None and not c.cutoff_passed:
                 found.setdefault(c.available_date, []).append(c.product_id)
         if not candidates:
             blocked = [n["product_id"] for n in not_offered

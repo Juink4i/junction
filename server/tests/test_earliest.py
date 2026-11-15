@@ -94,3 +94,18 @@ def test_a_failing_probe_is_skipped():
     result, catalog, _ = quote(rule)
     assert result["status"] == "ok"
     assert result["earliest"]["date"] == "2026-11-18"
+
+
+def test_cutoff_passed_candidates_never_give_an_earliest_date():
+    result, _, _ = quote(lambda d, pid: {"available_date": NEED_BY, "cutoff_passed": True})
+    assert result["earliest"] is None
+
+
+def test_a_cutoff_passed_candidate_does_not_hide_or_beat_a_genuinely_later_one():
+    def rule(d, pid):
+        if pid == "464201":
+            return {"available_date": NEED_BY, "cutoff_passed": True}
+        return {"available_date": date(2026, 11, 18), "cutoff_passed": False}
+
+    result, _, _ = quote(rule)
+    assert result["earliest"] == {"date": "2026-11-18", "product_ids": ["465039"]}
