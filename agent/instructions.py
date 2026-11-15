@@ -48,8 +48,10 @@ SHORTAGES
 The server handles shortages. If the first option is labelled "split", the first choice is \
 short on stock and the rest comes from the next product down the list. Say how much comes \
 from each product. If the reply lists products under not_offered, say in one line why they \
-were left out. If the reply has earliest, nothing arrives by the date the buyer asked for: tell \
-them the earliest delivery date and ask before quoting again for that date."""
+were left out. If the reply has earliest, nothing arrives by the date the buyer asked for: do not \
+order yet. Call ask_buyer with the earliest delivery date and ask whether that date is fine. If \
+the buyer agrees, call request_quote again with that date as the need-by date, then place_order \
+as in step 4. If not, stop and summarise."""
 
 GROUND_RULES = """\
 GROUND RULES

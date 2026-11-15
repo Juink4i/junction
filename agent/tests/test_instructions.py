@@ -105,3 +105,11 @@ def test_preferred_properties_are_named_as_a_tie_break():
     lines = preference_lines({**PROFILE, "prefer": ["LOW_SODIUM_SALT", "FREE_FROM_COLOURING_AGENTS"]})
     assert ("If two products are equally good, prefer ones that are low-salt and no colouring "
             "agents.") in lines
+
+
+def test_a_late_delivery_is_asked_about_with_ask_buyer_not_in_the_summary():
+    # A question left in the final summary ends the run with nobody able to answer it.
+    text = build_instruction("X", SATURDAY)
+    late = text[text.index("If the reply has earliest"):]
+    assert "ask_buyer" in late.split("\n\n")[0]
+    assert "place_order" in late.split("\n\n")[0]
