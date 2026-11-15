@@ -29,8 +29,8 @@ describe('findCategories', () => {
     expect(findCategories(items, 'BUTTER', []).map((c) => c.code)).toEqual(['10500', '10515'])
   })
 
-  it('leaves out what is already picked, and finds nothing for an empty query', () => {
+  it('leaves out what is already picked, and lists the rest for an empty query', () => {
     expect(findCategories(items, 'butter', ['10500']).map((c) => c.code)).toEqual(['10515'])
-    expect(findCategories(items, '  ', [])).toEqual([])
+    expect(findCategories(items, '  ', ['10400']).map((c) => c.code)).toEqual(['10402', '10500', '10515', '22413'])
   })
 })

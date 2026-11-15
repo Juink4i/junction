@@ -1,7 +1,8 @@
 // Form widgets for a kitchen's answers, shared by onboarding and the mandate editor,
 // so a field set at sign-up is edited later with the same control and the same choices.
-import { ArrowUp, Plus, Trash2, X } from 'lucide-react'
-import { useState } from 'react'
+import { ArrowUp, ChevronDown, Plus, Trash2, X } from 'lucide-react'
+import { Popover } from 'radix-ui'
+import { useState, type KeyboardEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import type { Choice, OnboardingOptions, UsualOrder } from '@/lib/types'
@@ -40,22 +41,45 @@ export function Chips({ items, chosen, onChange, single, tone = 'sage' }: { item
 }
 
 /** Matches on the name first, then on the code or an example product, so "oat" finds "Plant-based drinks". */
-export function findCategories(items: Choice[], query: string, skip: string[], limit = 8): Choice[] {
+export function findCategories(items: Choice[], query: string, skip: string[]): Choice[] {
   const q = query.trim().toLowerCase()
-  if (!q) return []
+  const open = items.filter((c) => !skip.includes(c.code))
+  if (!q) return open
   // From the start of a word, so "oat" does not find "goat" or "groats".
   const word = new RegExp(`(^|[^\\p{L}\\p{N}])${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'u')
   const inName = (c: Choice) => word.test(c.name.toLowerCase())
   const elsewhere = (c: Choice) => c.code.startsWith(q) || (c.examples ?? []).some((e) => word.test(e.toLowerCase()))
-  const open = items.filter((c) => !skip.includes(c.code))
-  return [...open.filter(inName), ...open.filter((c) => !inName(c) && elsewhere(c))].slice(0, limit)
+  return [...open.filter(inName), ...open.filter((c) => !inName(c) && elsewhere(c))]
 }
 
-/** Picked categories as removable chips, and a search box to add more. */
+/** A dropdown with a search box to add a category; what is picked shows as removable chips. */
 export function CategoryPicker({ items, chosen, onChange }: { items: Choice[]; chosen: string[]; onChange: (v: string[]) => void }) {
+  const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [active, setActive] = useState(0)
   const found = findCategories(items, query, chosen)
   const name = (code: string) => items.find((c) => c.code === code)?.name ?? code
+
+  const show = (next: boolean) => {
+    setOpen(next)
+    setQuery('')
+    setActive(0)
+  }
+  const pick = (code: string) => {
+    onChange([...chosen, code])
+    show(false)
+  }
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const next = Math.min(Math.max(active + (e.key === 'ArrowDown' ? 1 : -1), 0), found.length - 1)
+      setActive(next)
+      document.getElementById(`category-option-${next}`)?.scrollIntoView({ block: 'nearest' })
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (found[active]) pick(found[active].code)
+    }
+  }
 
   return (
     <div className="space-y-2">
@@ -74,25 +98,55 @@ export function CategoryPicker({ items, chosen, onChange }: { items: Choice[]; c
           ))}
         </div>
       )}
-      <Input type="search" placeholder="Search categories, for example butter or oat drink" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search categories" />
-      {query.trim() !== '' &&
-        (found.length ? (
-          <ul className="divide-y rounded-md border bg-white">
-            {found.map((c) => (
-              <li key={c.code}>
-                <button type="button" onClick={() => onChange([...chosen, c.code])} className="flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-muted">
-                  <Plus className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0">
-                    <span className="text-sm font-medium text-emphasis">{c.name}</span>
-                    {c.examples?.length ? <span className="block truncate text-xs text-muted-foreground">e.g. {c.examples.join(', ')}</span> : null}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-xs text-muted-foreground">No category matches “{query.trim()}”.</p>
-        ))}
+      <Popover.Root open={open} onOpenChange={show}>
+        <Popover.Trigger asChild>
+          <button type="button" className={cn(select, 'flex w-full items-center justify-between text-left text-muted-foreground')}>
+            {chosen.length ? 'Add another category' : 'Add a category'}
+            <ChevronDown className="size-4" />
+          </button>
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Content
+            align="start"
+            sideOffset={4}
+            className="z-50 w-(--radix-popover-trigger-width) min-w-64 overflow-hidden rounded-md border bg-white shadow-md"
+          >
+            <div className="border-b p-2">
+              <Input
+                autoFocus
+                type="search"
+                placeholder="Search, for example butter or oat drink"
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value)
+                  setActive(0)
+                }}
+                onKeyDown={onKey}
+                aria-label="Search categories"
+              />
+            </div>
+            {found.length ? (
+              <ul role="listbox" aria-label="Categories" className="max-h-64 overflow-y-auto py-1">
+                {found.map((c, i) => (
+                  <li key={c.code} id={`category-option-${i}`} role="option" aria-selected={i === active}>
+                    <button
+                      type="button"
+                      onClick={() => pick(c.code)}
+                      onMouseEnter={() => setActive(i)}
+                      className={cn('w-full px-3 py-1.5 text-left', i === active && 'bg-muted')}
+                    >
+                      <span className="block text-sm font-medium text-emphasis">{c.name}</span>
+                      {c.examples?.length ? <span className="block truncate text-xs text-muted-foreground">e.g. {c.examples.join(', ')}</span> : null}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="px-3 py-3 text-xs text-muted-foreground">No category matches “{query.trim()}”.</p>
+            )}
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
     </div>
   )
 }

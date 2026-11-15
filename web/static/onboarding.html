@@ -14,10 +14,17 @@
     .chip input { position: absolute; opacity: 0; pointer-events: none; }
     .chip:has(input:checked), .chip.on { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
     #cats:not(:empty) { margin-bottom: 8px; }
-    .found { margin-top: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
-    .found button { display: block; width: 100%; padding: 8px 10px; border: 0; border-top: 1px solid var(--line);
+    .combo { position: relative; }
+    .combo-btn { display: flex; width: 100%; min-height: 40px; align-items: center; justify-content: space-between; padding: 0 10px;
+      border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font: inherit; cursor: pointer; }
+    .combo-btn span:last-child { font-size: 16px; }
+    .combo-panel { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20; padding: 8px;
+      border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
+    .found { max-height: 260px; overflow-y: auto; margin-top: 8px; }
+    .found button { display: block; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px;
       background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
-    .found button:first-child { border-top: 0; }
+    .found button:hover, .found button:focus { background: var(--line); }
+    .found .muted { padding: 6px 8px; margin: 0; }
     .found .eg { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .card h2 { margin: 0 0 4px; font-size: 16px; }
     .field { margin-top: 14px; }
@@ -91,8 +98,13 @@
         <section class="card"><h2>What the agent may buy</h2>
           <div class="field"><label class="lab" for="cat_search">Categories <span class="faint">(optional). None picked means any category.</span></label>
             <div id="cats" class="chips"></div>
-            <input type="search" id="cat_search" placeholder="Search categories, for example butter or oat drink">
-            <div id="cat_found"></div></div>
+            <div class="combo" id="cat_combo">
+              <button type="button" class="combo-btn" id="cat_toggle" aria-expanded="false"><span></span><span aria-hidden="true">▾</span></button>
+              <div class="combo-panel hidden" id="cat_panel">
+                <input type="search" id="cat_search" placeholder="Search, for example butter or oat drink" aria-label="Search categories">
+                <div id="cat_found" class="found" role="listbox" aria-label="Categories"></div>
+              </div>
+            </div></div>
         </section>
         <section class="card"><h2>Money</h2>
           <div class="field"><label class="lab" for="max_order">The agent may spend alone, per order, in euros</label>
@@ -122,12 +134,12 @@
     // From the start of a word, so "oat" does not find "goat".
     function findCategories(query, skip) {
       const q = query.trim().toLowerCase();
-      if (!q) return [];
-      const word = new RegExp(`(^|[^\\p{L}\\p{N}])${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "u");
       const open = opts.categories.filter((c) => !skip.includes(c.code));
+      if (!q) return open;
+      const word = new RegExp(`(^|[^\\p{L}\\p{N}])${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "u");
       const inName = (c) => word.test(c.name.toLowerCase());
       const elsewhere = (c) => c.code.startsWith(q) || (c.examples || []).some((e) => word.test(e.toLowerCase()));
-      return [...open.filter(inName), ...open.filter((c) => !inName(c) && elsewhere(c))].slice(0, 8);
+      return [...open.filter(inName), ...open.filter((c) => !inName(c) && elsewhere(c))];
     }
 
     function renderCats() {
@@ -135,12 +147,24 @@
       const name = (code) => opts.categories.find((c) => c.code === code)?.name ?? code;
       $("cats").innerHTML = chosen.map((code) =>
         `<button type="button" class="chip on" data-uncat="${esc(code)}" aria-label="Remove ${esc(name(code))}">${esc(name(code))} ×</button>`).join("");
+      $("cat_toggle").firstElementChild.textContent = chosen.length ? "Add another category" : "Add a category";
+      renderFound();
+    }
+
+    function renderFound() {
       const query = $("cat_search").value;
-      const found = findCategories(query, chosen);
-      $("cat_found").innerHTML = !query.trim() ? "" : found.length
-        ? '<div class="found">' + found.map((c) => `<button type="button" data-cat="${esc(c.code)}">+ ${esc(c.name)}`
-            + (c.examples?.length ? `<span class="eg">e.g. ${esc(c.examples.join(", "))}</span>` : "") + "</button>").join("") + "</div>"
+      const found = findCategories(query, answers.money.allowed_categories);
+      $("cat_found").innerHTML = found.length
+        ? found.map((c) => `<button type="button" role="option" data-cat="${esc(c.code)}">${esc(c.name)}`
+            + (c.examples?.length ? `<span class="eg">e.g. ${esc(c.examples.join(", "))}</span>` : "") + "</button>").join("")
         : `<p class="muted">No category matches “${esc(query.trim())}”.</p>`;
+    }
+
+    function showCategories(open) {
+      $("cat_panel").classList.toggle("hidden", !open);
+      $("cat_toggle").setAttribute("aria-expanded", String(open));
+      $("cat_search").value = "";
+      if (open) { renderFound(); $("cat_found").scrollTop = 0; $("cat_search").focus(); }
     }
 
     function renderRanks() {
@@ -234,14 +258,28 @@
     (async () => {
       opts = await getJSON("/api/onboarding/options");
       $("form").addEventListener("input", (e) => {
-        if (e.target.id === "cat_search") renderCats();
+        if (e.target.id === "cat_search") renderFound();
         else previewSoon();
+      });
+      $("form").addEventListener("keydown", (e) => {
+        if (e.target.id === "cat_search" && e.key === "Enter") {
+          e.preventDefault();
+          $("cat_found").querySelector("[data-cat]")?.click();
+        } else if (e.key === "Escape" && !$("cat_panel").classList.contains("hidden")) {
+          showCategories(false); $("cat_toggle").focus();
+        }
+      });
+      document.addEventListener("click", (e) => {
+        if (answers && !$("cat_combo").contains(e.target)) showCategories(false);
       });
       $("form").addEventListener("click", (e) => {
         const t = e.target.closest("button") || e.target;
         const cats = answers.money.allowed_categories;
-        if (t.dataset.cat !== undefined) {
+        if (t.id === "cat_toggle") {
+          showCategories($("cat_panel").classList.contains("hidden"));
+        } else if (t.dataset.cat !== undefined) {
           cats.push(t.dataset.cat);
+          showCategories(false);
           renderCats(); previewSoon();
         } else if (t.dataset.uncat !== undefined) {
           cats.splice(cats.indexOf(t.dataset.uncat), 1);
