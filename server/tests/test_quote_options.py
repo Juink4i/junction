@@ -245,3 +245,15 @@ def test_a_short_first_choice_is_offered_as_a_split(svc, hotel, catalog, tokens)
     assert result["not_offered"] == []  # 464201 is part of the split, so it was not left out
     placed = svc.place_order(split["quote"]["quote_id"], tokens["hotel"], "Split")
     assert placed["status"] == "pending_approval"  # 1,578 is over the hotel's 1,500 limit
+
+
+def test_a_substitute_option_goes_to_a_person_when_the_mandate_allows_none(svc, school, tokens):
+    result = quoted(svc, school, amount=100)
+    first, second = result["options"][0], result["options"][1]
+    assert second["quote"]["lines"][0]["product_id"] != first["quote"]["lines"][0]["product_id"]
+    assert not any("replaces the first choice" in r for r in first["expected"]["reasons"])
+    assert second["expected"]["status"] == "pending_approval"
+    assert any("replaces the first choice" in r for r in second["expected"]["reasons"])
+    placed = svc.place_order(second["quote"]["quote_id"], tokens["school"], "Cheaper option")
+    assert placed["status"] == "pending_approval"
+    assert any("allows no substitutes" in r for r in placed["reasons"])

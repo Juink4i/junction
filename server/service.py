@@ -489,13 +489,23 @@ class Service:
         )
         return {**body, "signature": signature}
 
+    def _first_choice(self, set_id: str | None) -> dict | None:
+        """The first line of the set's rank-1 quote: what the buyer is taken to have asked for."""
+        row = self.conn.execute("SELECT body_json FROM quotes WHERE set_id = ? AND rank = 1",
+                                (set_id,)).fetchone() if set_id else None
+        if row is None:
+            return None
+        line = json.loads(row["body_json"])["lines"][0]
+        return {"product_id": line["product_id"], "name": line["name"],
+                "eur_per_unit": line["line_total_eur"] / line["covers"]}
+
     def _forecast(self, quote: dict, need_by: date, buyer: Buyer, products: dict,
                   history: list[dict], now: datetime, set_id: str | None = None):
         """What Policy would decide for this quote now. Nothing is saved, and the Decisions
         API is not asked. The decision at order time is the one that counts."""
         return decide({**quote, "need_by": need_by.isoformat()}, buyer.mandate, products, history,
                       None, self._spent_in_period(buyer.buyer_id, buyer.mandate, now, quote["quote_id"],
-                                                         set_id), now)
+                                                         set_id), now, self._first_choice(set_id))
 
     @locked
     def request_quote(self, buyer: Buyer, product_ids: list[str] | None, amount: float | None,
@@ -605,7 +615,7 @@ class Service:
         for rank_no, plan in enumerate(plans, 1):
             quote = self._issue_quote(list(plan.lines), need_by, now, buyer.buyer_id, set_id,
                                       rank_no, plan.label)
-            decision = self._forecast(quote, need_by, buyer, products, history, now)
+            decision = self._forecast(quote, need_by, buyer, products, history, now, set_id)
             options.append({"rank": rank_no, "label": plan.label, "trade_off": plan.trade_off,
                             "expected": {"status": decision.status, "reasons": decision.reasons},
                             "quote": quote})
@@ -768,7 +778,8 @@ class Service:
         history = self._history(buyer_id)
         ai_unusual = self._ai_unusual(mandate["buyer"], history, quote, products, quote_id)
         decision = decide({**quote, "need_by": need_by.isoformat()}, mandate, products, history,
-                          ai_unusual, self._spent_in_period(buyer_id, mandate, now, quote_id, set_id), now)
+                          ai_unusual, self._spent_in_period(buyer_id, mandate, now, quote_id, set_id), now,
+                          self._first_choice(set_id))
         alternatives = []
         if decision.status != "confirmed" and set_id:
             alternatives = self._alternatives(set_id, quote_id, Buyer(buyer_id, mandate), history, now)

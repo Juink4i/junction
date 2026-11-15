@@ -371,3 +371,61 @@ def test_a_vegetarian_kitchen_has_unclaimed_eggs_checked_by_a_person():
     decision = decide(quote(_egg_line()), m, _eggs(), [])
     assert decision.status == "pending_approval"
     assert any("does not say whether Barn egg 30 pcs is vegetarian" in r for r in decision.reasons)
+
+
+FIRST = {"product_id": "464201", "name": PRODUCTS["464201"].name_en, "eur_per_unit": 1.56}
+
+
+def substitute(eur_per_litre):
+    return line("463038", units=5, covers=100.0, unit_price=round(eur_per_litre * 20, 2))
+
+
+def no_substitutes():
+    m = mandate()
+    m["substitution"]["allowed"] = False
+    return m
+
+
+def test_a_substitute_needs_a_human_when_the_mandate_allows_none():
+    q = quote(substitute(1.40))
+    decision = decide(q, no_substitutes(), PRODUCTS, [], first_choice=FIRST)
+    assert decision.status == "pending_approval"
+    assert (f"{q['lines'][0]['name']} replaces the first choice, {FIRST['name']}. This buyer's "
+            "mandate allows no substitutes without a person's approval.") in decision.reasons
+
+
+def test_the_first_choice_alone_is_not_a_substitute():
+    decision = decide(quote(), no_substitutes(), PRODUCTS, [], first_choice=FIRST)
+    assert decision.status == "confirmed"
+
+
+def test_a_split_with_a_substitute_line_is_caught():
+    q = quote(line(units=40, covers=40.0), substitute(1.40))
+    decision = decide(q, no_substitutes(), PRODUCTS, [], first_choice=FIRST)
+    assert decision.status == "pending_approval"
+    assert sum("replaces the first choice" in r for r in decision.reasons) == 1
+
+
+def test_a_substitute_over_the_price_cap_needs_a_human():
+    decision = decide(quote(substitute(1.80)), mandate(), PRODUCTS, [], first_choice=FIRST)
+    assert decision.status == "pending_approval"
+    name = PRODUCTS["463038"].name_en
+    assert (f"{name} costs 15% more per litre than the first choice, {FIRST['name']}. "
+            "The mandate allows substitutes up to 10% more.") in decision.reasons
+
+
+def test_a_substitute_within_the_price_cap_is_confirmed():
+    decision = decide(quote(substitute(1.70)), mandate(), PRODUCTS, [], first_choice=FIRST)
+    assert decision.status == "confirmed"
+
+
+def test_a_mandate_without_substitution_rules_is_not_affected():
+    m = mandate()
+    del m["substitution"]
+    decision = decide(quote(substitute(1.80)), m, PRODUCTS, [], first_choice=FIRST)
+    assert decision.status == "confirmed"
+
+
+def test_no_first_choice_means_no_substitution_check():
+    decision = decide(quote(substitute(1.80)), no_substitutes(), PRODUCTS, [])
+    assert decision.status == "confirmed"

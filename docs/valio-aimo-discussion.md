@@ -116,6 +116,7 @@ Later this could become a W3C Verifiable Credential, or follow Google's AP2 form
 | Would take this week's or month's spending over the budget | 👤 **Human** approves |
 | Would arrive on a weekday the kitchen cannot receive goods | 👤 **Human**, with the day shown |
 | Substitute drops a must-keep tag or costs too much | 👤 **Human** |
+| Mandate allows no substitutes and the order replaces the first choice | 👤 **Human** |
 | Arrives after the need-by date, or the cut-off has passed | 👤 **Human**, with options shown |
 | Allergen info missing for a strict buyer | 👤 **Human** |
 | Allergen rule broken, mandate expired, bad signature, changed quote | ⛔ **Reject.** Nobody can override. |

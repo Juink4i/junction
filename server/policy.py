@@ -126,8 +126,34 @@ def _closed_since_quote(line: dict, now: datetime | None) -> bool:
         return True
 
 
+UNIT_WORDS = {"L": "litre", "KG": "kg", "PCS": "piece"}
+
+
+def _substitution(quote: dict, mandate: dict, first_choice: dict | None) -> list[str]:
+    """Lines that are not the first choice, held to the mandate's substitution rules."""
+    rules = mandate.get("substitution")
+    if not rules or not first_choice:
+        return []
+    reasons = []
+    cap = rules.get("max_price_increase_pct")
+    for line in quote["lines"]:
+        if line["product_id"] == first_choice["product_id"]:
+            continue
+        if rules.get("allowed", True) is False:
+            reasons.append(f"{line['name']} replaces the first choice, {first_choice['name']}. "
+                           "This buyer's mandate allows no substitutes without a person's approval.")
+        elif cap is not None:
+            increase = (line["line_total_eur"] / line["covers"]) / first_choice["eur_per_unit"] - 1
+            if increase * 100 > cap:
+                unit = UNIT_WORDS.get(line["content_unit"], line["content_unit"])
+                reasons.append(f"{line['name']} costs {round(increase * 100)}% more per {unit} than "
+                               f"the first choice, {first_choice['name']}. The mandate allows "
+                               f"substitutes up to {cap:g}% more.")
+    return reasons
+
+
 def _needs_human(quote: dict, mandate: dict, products: dict, spent_in_period: float = 0.0,
-                 now: datetime | None = None) -> list[str]:
+                 now: datetime | None = None, first_choice: dict | None = None) -> list[str]:
     limits = mandate["auto_approve"]
     rules = mandate["hard_rules"]
     reasons = []
@@ -185,23 +211,25 @@ def _needs_human(quote: dict, mandate: dict, products: dict, spent_in_period: fl
             reasons.append(f"The product data does not say whether {line['name']} is "
                            f"{', '.join(unproven)}, which the mandate requires. Unknown is not "
                            "treated as safe, so a person must check it.")
-    return reasons
+    return reasons + _substitution(quote, mandate, first_choice)
 
 
 def decide(quote: dict, mandate: dict, products: dict, history: list[dict],
            ai_unusual: str | None = None, spent_in_period: float = 0.0,
-           now: datetime | None = None) -> Decision:
+           now: datetime | None = None, first_choice: dict | None = None) -> Decision:
     """quote is a verified quote plus its need_by date; mandate is already verified.
 
     ai_unusual is an optional reason from an outside scorer. It can only send the order to a
     person. spent_in_period is what the buyer's other live orders add up to in the current
     budget period. now is when the order arrived, to see a cut-off that passed since the quote.
+    first_choice is {product_id, name, eur_per_unit} of the set's rank-1 first line; any other
+    product in the quote is a substitute.
     """
     stops = hard_stops(quote, mandate, products)
     if stops:
         return Decision("rejected", stops)
 
-    for_human = _needs_human(quote, mandate, products, spent_in_period, now)
+    for_human = _needs_human(quote, mandate, products, spent_in_period, now, first_choice)
     for_human += _unusual(quote, products, history) + ([ai_unusual] if ai_unusual else [])
     if for_human:
         return Decision("pending_approval", for_human)
