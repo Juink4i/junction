@@ -73,7 +73,8 @@ SearchResult: status: "ok", understood: {product, must_have, from_mandate},
               screened_by, total_matches, truncated, hint?
 QuoteSet:     status: "ok", set_id, asked: {amount, unit, need_by},
               options: [{rank, label, trade_off, expected: {status, reasons}, quote: Quote}],
-              not_offered: [{product_id, name, reason}]
+              not_offered: [{product_id, name, reason}],
+              earliest: {date, product_ids} | null
 Quote:        quote_id, lines: [{product_id, name, units, sales_unit, covers, content_unit,
               unit_price_eur, line_total_eur, available_date, cutoff_passed, closing_time,
               stock: "confirmed"|"unconfirmed"}],
@@ -87,6 +88,8 @@ LogEntry:     seq, time, actor, action, reason, prev_hash, hash
 `ProductSummary` and `Product` are Contract A's shapes plus `properties`: the product's tags in plain words.
 
 Every error is `{code, message, retryable}`. When a parameter is missing or a must-have word is not known, `search_products` and `request_quote` answer `{status: "needs_clarification", missing, unknown, known_properties, question}`.
+
+`earliest` is null when an option arrives by `need_by`. Otherwise it is the earliest delivery date the server found, with the products that can arrive on it, or null if it found none.
 
 `label` is "best", "better", "good", "other" or "split". `expected` is what the mandate would decide if that option were ordered now; the decision at order time is the one that counts. `preferences.priorities` is the buyer's own order of `price`, `reliability`, `finnish`, `sustainability`.
 

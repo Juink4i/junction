@@ -627,9 +627,42 @@ class Service:
             self._log(buyer.actor, "request_quote",
                       f"Nothing could be offered for {amount:g} {unit} by {need_by.isoformat()}: "
                       f"{len(not_offered)} products were left out.")
+        earliest = self._earliest(buyer, candidates, plans, not_offered, need_by)
         return {"status": "ok", "set_id": set_id,
                 "asked": {"amount": amount, "unit": unit, "need_by": need_by.isoformat()},
-                "options": options, "not_offered": not_offered}
+                "options": options, "not_offered": not_offered, "earliest": earliest}
+
+    def _earliest(self, buyer: Buyer, candidates: list[ranking.Candidate], plans: list,
+                  not_offered: list[dict], need_by: date) -> dict | None:
+        """The earliest delivery date, when no offered option arrives by need_by."""
+        if any(all(l.candidate.available_date is not None and l.candidate.available_date <= need_by
+                   for l in plan.lines) for plan in plans):
+            return None
+        found: dict[date, list[str]] = {}
+        for c in candidates:
+            if c.available_date is not None:
+                found.setdefault(c.available_date, []).append(c.product_id)
+        if not candidates:
+            blocked = [n["product_id"] for n in not_offered
+                       if n["reason"].startswith("Cannot be ordered for")]
+            for days in range(1, 4) if blocked else ():
+                day = need_by + timedelta(days=days)
+                probe = self._offers(blocked, day)
+                if "code" in probe and "retryable" in probe:
+                    continue
+                for pid, offer in probe.items():
+                    if offer.orderable and offer.available_date is not None:
+                        found.setdefault(offer.available_date, []).append(pid)
+                if found:
+                    break
+        if not found:
+            return None
+        day = min(found)
+        ids = sorted(found[day])
+        self._log(buyer.actor, "request_quote",
+                  f"Nothing arrives by {need_by.isoformat()}. The earliest delivery is "
+                  f"{day.isoformat()} ({len(ids)} product{'s' if len(ids) != 1 else ''}).")
+        return {"date": day.isoformat(), "product_ids": ids}
 
     def _measured_in(self, product_id: str, amount: float, unit: str) -> set[str]:
         """The other units this product can be measured in. Prices are cached by now."""

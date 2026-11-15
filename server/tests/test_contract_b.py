@@ -136,7 +136,8 @@ async def test_request_quote_returns_ranked_options():
         result = await call(client, "request_quote", product_ids=["464201", "464179"], amount=1000,
                             unit="L", need_by=NEED_BY)
         asked = await call(client, "request_quote", product_ids=["464201"])
-    assert set(result) == {"status", "set_id", "asked", "options", "not_offered"}
+    assert set(result) == {"status", "set_id", "asked", "options", "not_offered",
+                      "earliest"}
     best = result["options"][0]
     assert set(best) == {"rank", "label", "trade_off", "expected", "quote"}
     assert set(best["expected"]) == {"status", "reasons"}
