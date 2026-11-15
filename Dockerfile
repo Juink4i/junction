@@ -19,9 +19,8 @@ COPY --chown=user pyproject.toml uv.lock .python-version ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY --chown=user . .
 COPY --chown=user --from=ui /ui/dist ./frontend/dist
-# The Valio Aimo files are never committed. They arrive encrypted (deploy/data.enc) and the
-# DATA_KEY build secret opens them; then the product file → data/catalog.db, once.
-RUN --mount=type=secret,id=DATA_KEY,mode=0444,required=false \
-    python deploy/unpack_data.py && python -m catalog.load
+# The Valio Aimo files are never committed. Railway gets data/raw/ in the local upload; a
+# Space would get deploy/data.enc instead (see deploy/unpack_data.py). Then → data/catalog.db.
+RUN python deploy/unpack_data.py && python -m catalog.load
 EXPOSE 7860
 CMD ["bash", "deploy/start.sh"]
