@@ -1,0 +1,15 @@
+.env
+.git/
+.venv/
+**/__pycache__/
+.pytest_cache/
+.gstack/
+.superpowers/
+qa/
+web/ui/
+frontend/node_modules/
+frontend/dist/
+data/*.db
+data/buyer_keys/
+data/buyers/
+server/mandates/
