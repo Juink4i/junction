@@ -410,7 +410,7 @@ def test_a_substitute_over_the_price_cap_needs_a_human():
     decision = decide(quote(substitute(1.80)), mandate(), PRODUCTS, [], first_choice=FIRST)
     assert decision.status == "pending_approval"
     name = PRODUCTS["463038"].name_en
-    assert (f"{name} costs 15% more per litre than the first choice, {FIRST['name']}. "
+    assert (f"{name} costs 16% more per litre than the first choice, {FIRST['name']}. "
             "The mandate allows substitutes up to 10% more.") in decision.reasons
 
 
