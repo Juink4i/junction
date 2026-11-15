@@ -16,7 +16,8 @@ BUYER_ID = re.compile(r"[a-z0-9-]{3,64}")
 
 
 class MandateError(Exception):
-    """Why a mandate was not accepted. `code` is mandate_missing, mandate_invalid or mandate_expired."""
+    """Why a mandate was not accepted. `code` is mandate_missing, mandate_invalid,
+    mandate_expired or mandate_replaced."""
 
     def __init__(self, message: str, code: str = "mandate_invalid"):
         super().__init__(message)
@@ -129,7 +130,13 @@ def verify_mandate(token: str, conn: sqlite3.Connection, today: date) -> tuple[s
         buyer_id = jwt.get_unverified_header(token).get("kid")
     except jwt.InvalidTokenError:
         raise MandateError("The mandate is not a readable signed token.")
-    row = conn.execute("SELECT public_pem FROM buyers WHERE buyer_id = ?", (buyer_id,)).fetchone()
+    row = conn.execute("SELECT public_pem, mandate_id FROM buyers WHERE buyer_id = ?",
+                       (buyer_id,)).fetchone()
     if row is None:
         raise MandateError("The mandate's signing key is not registered with Valio Aimo.")
-    return buyer_id, check_mandate(token, signing.load_public(row["public_pem"]), today)
+    mandate = check_mandate(token, signing.load_public(row["public_pem"]), today)
+    # A kitchen that tightens its rules must bind agents still holding the old version too.
+    if row["mandate_id"] and mandate["mandate_id"] != row["mandate_id"]:
+        raise MandateError(f"Mandate {mandate['mandate_id']} was replaced by {row['mandate_id']}. "
+                           "Use the kitchen's newest mandate.", code="mandate_replaced")
+    return buyer_id, mandate

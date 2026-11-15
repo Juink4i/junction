@@ -13,9 +13,9 @@ data/buyers/<id>/buyer_key.pem, which Valio Aimo already knows, so it is never r
 The demo buyers' keys were thrown away by server.make_mandate, so the first edit makes one
 in data/buyer_keys/<id>.pem and registers its public half.
 
-Then the buyer's public key (demo buyers, first edit only) and a "mandate:updated" log row
-go into state.db. Those two are the only writes web/ ever makes to state.db; they are all
-in register() below.
+Then the buyer's public key (demo buyers, first edit only), its new mandate id and a
+"mandate:updated" log row go into state.db. Those are the only writes web/ ever makes to
+state.db; they are all in register() below.
 """
 
 from __future__ import annotations
@@ -307,20 +307,22 @@ def _profile_orders(mandate: dict, names: list[str]) -> list[dict]:
     return out
 
 
-def register(state_db: Path, buyer_id: str, new_key: Ed25519PrivateKey | None, actor: str,
-             reason: str) -> None:
+def register(state_db: Path, buyer_id: str, new_key: Ed25519PrivateKey | None, mandate_id: str,
+             actor: str, reason: str) -> None:
     """The only writes web/ makes to state.db (the trade server owns it):
     1. a demo buyer's public key, only when it changed (its first edit rotates the key);
        new_key is None for an onboarded kitchen, whose key is already registered,
-    2. one "mandate:updated" row on the hash-chained log. audit.append takes its own
+    2. the buyer's current mandate id, so the server refuses the older versions,
+    3. one "mandate:updated" row on the hash-chained log. audit.append takes its own
        BEGIN IMMEDIATE transaction, so it is safe next to the running trade server."""
     conn = connect(state_db)
     try:
-        if new_key is not None:
-            pem = signing.public_pem(new_key.public_key())
-            with transaction(conn):
+        with transaction(conn):
+            if new_key is not None:
+                pem = signing.public_pem(new_key.public_key())
                 conn.execute("UPDATE buyers SET public_pem = ? WHERE buyer_id = ? AND public_pem != ?",
                              (pem, buyer_id, pem))
+            conn.execute("UPDATE buyers SET mandate_id = ? WHERE buyer_id = ?", (mandate_id, buyer_id))
         audit.append(conn, datetime.now(timezone.utc), actor, "mandate:updated", reason)
     finally:
         conn.close()
@@ -380,5 +382,5 @@ def _sign_and_register(buyer_id: str, buyer_name: str, current: dict, new: dict,
     _write_atomic(path, signing.sign(new, key, kid=buyer_id))  # the same file it was read from
     reason = (f"{buyer_name} changed its mandate to {new['mandate_id']}: {'; '.join(diff)}. "
               "The agent uses the new rules from its next order.")
-    register(state_db, buyer_id, new_key, actor=new["approvers"][0], reason=reason)
+    register(state_db, buyer_id, new_key, new["mandate_id"], actor=new["approvers"][0], reason=reason)
     return True

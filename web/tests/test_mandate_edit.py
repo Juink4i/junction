@@ -8,7 +8,7 @@ import pytest
 
 from agent.identity import key_path, sign_order
 from server import audit, signing
-from server.mandate import verify_mandate
+from server.mandate import MandateError, verify_mandate
 from web.tests.world import KID
 
 
@@ -325,3 +325,31 @@ def test_rejects_bad_usual_orders(client, world, body, words):
     assert (world.buyers / KID / "mandate.jwt").read_text() == token
     assert _profile(world, KID) == profile
     assert _updates(world.conn) == []
+
+
+# A kitchen that tightens its rules must not be bound only by agents that restart: once a new
+# version is signed, an agent still holding the old one is refused.
+
+def test_the_old_mandate_stops_working_once_a_new_version_is_signed(client, world):
+    # The first edit rotates a demo buyer's key; the second reuses it, so only the id tells.
+    assert client.put("/api/accounts/cafe/mandate",
+                      json={"auto_approve": {"max_order_eur": 600}}).status_code == 200
+    old_token = (world.mandates / "cafe.jwt").read_text()
+    assert client.put("/api/accounts/cafe/mandate",
+                      json={"auto_approve": {"max_order_eur": 450}}).status_code == 200
+    with pytest.raises(MandateError) as refused:
+        verify_mandate(old_token, world.conn, date.today())
+    assert refused.value.code == "mandate_replaced"
+    assert "mnd_cafe_kallio_003" in str(refused.value)
+    verify_mandate((world.mandates / "cafe.jwt").read_text(), world.conn, date.today())
+
+
+def test_an_onboarded_kitchens_old_mandate_stops_working_after_an_edit(client, world):
+    path = world.buyers / KID / "mandate.jwt"
+    old_token = path.read_text()
+    assert client.put(f"/api/accounts/{KID}/mandate",
+                      json={"auto_approve": {"max_order_eur": 120}}).status_code == 200
+    with pytest.raises(MandateError) as refused:
+        verify_mandate(old_token, world.conn, date.today())
+    assert refused.value.code == "mandate_replaced"
+    verify_mandate(path.read_text(), world.conn, date.today())

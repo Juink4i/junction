@@ -5,6 +5,7 @@ Temp paths only: nothing here touches data/state.db, server/mandates or data/buy
 from datetime import date, datetime, timezone
 
 import jwt
+import pytest
 from cryptography.hazmat.primitives import serialization
 
 from agent.identity import ensure_agent_key
@@ -15,7 +16,7 @@ from server import fake_catalog, signing
 from server.app import build_http_app
 from server.db import connect
 from server.make_mandate import DEMO_MANDATES, refresh_demo_buyers
-from server.mandate import verify_mandate
+from server.mandate import MandateError, verify_mandate
 from server.service import Service
 
 
@@ -99,3 +100,14 @@ async def test_a_demo_buyer_can_connect_after_the_refresh(tmp_path):
     assert found
     row = svc.conn.execute("SELECT actor FROM log WHERE action = 'search_products'").fetchone()
     assert row["actor"] == "buyer-agent-01"
+
+
+def test_refreshing_the_demo_mandates_retires_the_old_ones(tmp_path):
+    conn = connect(tmp_path / "state.db")
+    p = paths(tmp_path)
+    first = refresh_demo_buyers(conn, **p)
+    second = refresh_demo_buyers(conn, **p)
+    with pytest.raises(MandateError) as refused:
+        verify_mandate(first["hotel"], conn, date.today())
+    assert refused.value.code == "mandate_replaced"
+    verify_mandate(second["hotel"], conn, date.today())

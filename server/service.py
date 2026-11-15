@@ -169,8 +169,8 @@ class Service:
         usual = mandate.get("usual_orders", [])
         name = customer["name"] if customer else mandate["buyer"]
         with transaction(self.conn):
-            self.conn.execute("INSERT INTO buyers (buyer_id, name, public_pem) VALUES (?, ?, ?)",
-                              (buyer_id, name, public_pem))
+            self.conn.execute("INSERT INTO buyers (buyer_id, name, public_pem, mandate_id) "
+                              "VALUES (?, ?, ?, ?)", (buyer_id, name, public_pem, mandate["mandate_id"]))
             self.conn.executemany(
                 "INSERT INTO order_history (buyer_id, category, amount, content_unit, ordered_on) "
                 "VALUES (?, ?, ?, ?, ?)",
