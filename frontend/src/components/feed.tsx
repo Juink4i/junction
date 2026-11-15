@@ -53,6 +53,11 @@ export function resultSummary(tool: string, result: unknown): string {
   return 'done'
 }
 
+/** Gemini writes **bold** even when asked for plain text. */
+function Bold({ text }: { text?: string }) {
+  return <>{(text ?? '').split(/\*\*(.+?)\*\*/g).map((part, i) => (i % 2 ? <strong key={i}>{part}</strong> : part))}</>
+}
+
 function Bubble({ who, children, tone = 'agent' }: { who: string; children: React.ReactNode; tone?: 'agent' | 'buyer' }) {
   const Icon = tone === 'agent' ? Bot : UserRound
   return (
@@ -164,7 +169,7 @@ export function EventRow({ e, big }: { e: AgentEvent; big?: boolean }) {
     case 'user':
       return <Bubble who="Buyer" tone="buyer">{e.text}</Bubble>
     case 'agent':
-      return <Bubble who="Buyer agent">{e.text}</Bubble>
+      return <Bubble who="Buyer agent"><Bold text={e.text} /></Bubble>
     case 'request':
       return (
         <div className="rounded-md border border-dashed bg-muted/40 px-3 py-2 text-xs">
@@ -224,7 +229,7 @@ export function EventRow({ e, big }: { e: AgentEvent; big?: boolean }) {
       return e.summary ? (
         <div className="rounded-md bg-muted/60 px-3 py-2 text-sm">
           <span className="font-semibold text-emphasis">Summary: </span>
-          {e.summary}
+          <Bold text={e.summary} />
         </div>
       ) : null
     case 'verify':
